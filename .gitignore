@@ -1,0 +1,21 @@
+﻿# Unreal build junk
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.VC.db
+*.VC.opendb
+*.sln
+
+# EXCLUDE all game assets
+Content/
+
+# plugin build junk
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+Plugins/*/Saved/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
