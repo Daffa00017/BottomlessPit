@@ -1,0 +1,26 @@
+# Unreal build/cache
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+
+# IDE caches
+.vs/
+.vscode/
+*.VC.db
+*.VC.opendb
+*.sln
+*.ipch
+*.opensdf
+*.sdf
+*.log
+
+# Plugin build junk
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+Plugins/*/Saved/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
