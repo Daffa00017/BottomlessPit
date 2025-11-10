@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Actor/LevelActor/PlatformStrip.h"
+#include "PaperSprite.h"
 #include "Pawn/Enemy/CPP_EnemyParent.h"
 #include "LaneLevelGenerator.generated.h"
 
@@ -500,6 +501,8 @@ private:
 
 	FTimerHandle PoolTimer;
 
+	int32 NextWalkerIdx = 0;
+	int32 NextFlyerIdx = 0;
 };
 
 

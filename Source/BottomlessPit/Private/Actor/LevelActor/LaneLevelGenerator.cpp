@@ -70,17 +70,17 @@ ALaneLevelGenerator::ALaneLevelGenerator()
 void ALaneLevelGenerator::BeginPlay()
 {
 	Super::BeginPlay();
+
 	RecomputePlayfield();
 	UpdateSeamPosY();
 
-	// cache wall sprite size if we have a reference
+	// Cache wall sprite size (your side walls are pitched -> height in Z)
 	WallTileWUU = WallTileHUU = 0.f;
 	if (WallVariants.Num() > 0 && IsValid(WallVariants[0]))
 	{
-		const float ppuu = FMath::Max(WallVariants[0]->GetPixelsPerUnrealUnit(), 0.001f);
-		const FVector2D px = WallVariants[0]->GetSourceSize();
-		WallTileWUU = px.X / ppuu;
-		WallTileHUU = px.Y / ppuu;
+		const FBoxSphereBounds B = WallVariants[0]->GetRenderBounds();
+		WallTileWUU = B.BoxExtent.X * 2.f; // width across X
+		WallTileHUU = B.BoxExtent.Z * 2.f; // height along Z
 	}
 
 	if (bShowWalls) InitWallsInfinite();
@@ -140,12 +140,15 @@ void ALaneLevelGenerator::Tick(float DeltaSeconds)
 
 void ALaneLevelGenerator::RecomputePlayfield()
 {
-	// If a reference sprite is set, compute lane width = TilesPerLane * tileWUU
+	// If a reference sprite is set, you can derive lane width from its frame size.
 	if (ReferenceTileSprite)
 	{
-		const float PPUU = FMath::Max(ReferenceTileSprite->GetPixelsPerUnrealUnit(), 0.001f);
-		const float TileWUU = ReferenceTileSprite->GetSourceSize().X / PPUU; // 16 / 0.15 = 106.666...
-		LaneWidthUU = TileWUU * FMath::Max(1, TilesPerLane);        // e.g. TilesPerLane=2 -> 21.3333
+		// Bounds are already in UU (no PPUU divide needed).
+		const FBoxSphereBounds B = ReferenceTileSprite->GetRenderBounds();
+		const float TileWUU = B.BoxExtent.X * 2.f;
+
+		// OPTIONAL: if you want lane width driven by tiles, uncomment and plug your count:
+		// LaneWidthUU = FMath::Max(1, TilesPerLane) * TileWUU;
 	}
 
 	PlayfieldWidthUU = FMath::Max(NumLanes, 1) * FMath::Max(LaneWidthUU, 1.f);
@@ -158,7 +161,7 @@ void ALaneLevelGenerator::RecomputePlayfield()
 	LeftSeam->SetRelativeLocation(FVector(Xmin, 0.f, 0.f));
 	RightSeam->SetRelativeLocation(FVector(Xmax, 0.f, 0.f));
 
-	// Box extents are in local space; X thin, Y tall (local “vertical”), Z small
+	// Box extents are in local space; X thin, Y tall, Z small
 	const FVector Extents(SeamHalfThicknessX, SeamHalfHeightUU, 100.f);
 	LeftSeam->SetBoxExtent(Extents);
 	RightSeam->SetBoxExtent(Extents);
@@ -252,12 +255,34 @@ void ALaneLevelGenerator::WarmEnemyPools()
 
 ACPP_EnemyParent* ALaneLevelGenerator::BorrowFromPool(TArray<TObjectPtr<ACPP_EnemyParent>>& Pool, TSubclassOf<ACPP_EnemyParent> Cls, int32 PoolCap)
 {
-	for (ACPP_EnemyParent* E : Pool)
-		if (E && !E->IsActive())
-			return E;
+	// Choose which round-robin cursor to use based on which pool we’re scanning.
+	int32& rr = (&Pool == &WalkerPool) ? NextWalkerIdx : NextFlyerIdx;
 
-	// grow-by-1 if under cap
-	if (*Cls && Pool.Num() < PoolCap)
+	const int32 N = Pool.Num();
+	const float Now = GetWorld() ? GetWorld()->TimeSeconds : 0.f;
+
+	// First pass: pick only strictly POOLED enemies that also passed MinReuseDelay
+	for (int32 t = 0; t < N; ++t)
+	{
+		const int32 idx = (rr + t) % N;
+		ACPP_EnemyParent* E = Pool[idx];
+		if (!E) continue;
+
+		// Only reuse if truly pooled (never pick Dying/Active)
+		if (E->GetLifeState() != EEnemyLifeState::Pooled) continue;
+
+		// Optional: honor per-enemy reuse cooldown (from our earlier patch)
+		// If you didn’t add these fields, you can remove the two lines below.
+		const float sincePool = Now - E->PooledAtTime;
+		if (sincePool < E->MinReuseDelay) continue;
+
+		// Fairness: advance the cursor past this pick
+		rr = (idx + 1) % FMath::Max(N, 1);
+		return E;
+	}
+
+	// If nothing reusable yet and we’re allowed to grow, spawn one more
+	if (*Cls && N < PoolCap)
 	{
 		if (UWorld* W = GetWorld())
 		{
@@ -268,12 +293,17 @@ ACPP_EnemyParent* ALaneLevelGenerator::BorrowFromPool(TArray<TObjectPtr<ACPP_Ene
 			if (ACPP_EnemyParent* E = W->SpawnActor<ACPP_EnemyParent>(Cls, FVector(0.f, -100000.f, 0.f), FRotator::ZeroRotator, sp))
 			{
 				E->AttachToActor(this, FAttachmentTransformRules::KeepWorldTransform);
-				E->DeactivateToPool();
+				E->DeactivateToPool(); // puts it in Pooled state immediately
 				Pool.Add(E);
+
+				// Put cursor after the new slot for fairness on next call
+				rr = Pool.Num() % Pool.Num();
 				return E;
 			}
 		}
 	}
+
+	// None eligible this moment; let the caller skip this frame or try next tick.
 	return nullptr;
 }
 

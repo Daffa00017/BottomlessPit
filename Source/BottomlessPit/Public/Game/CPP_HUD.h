@@ -16,6 +16,8 @@ class BOTTOMLESSPIT_API ACPP_HUD : public AHUD
 public:
 	ACPP_HUD();
 
+    virtual void Tick(float DeltaTime) override;
+
 protected:
     virtual void BeginPlay() override;
 

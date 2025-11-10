@@ -20,19 +20,10 @@ public:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gun")
-    TSubclassOf<AActor> GunClass;
-
-    UPROPERTY(BlueprintReadOnly, Category = "Gun")
-    AActor* CurrentGunActor = nullptr;
-
-    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gun")
     float FireRate = 8.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gun|Fire")
     float RoundsPerMinute = 600.f;   // 600 RPM = 0.1s between shots
-
-    UFUNCTION(BlueprintCallable, Category = "Gun")
-    void SpawnAndAttachGun(USceneComponent* AttachTo, FName Socket = NAME_None);
 
     UFUNCTION(BlueprintCallable, Category = "Gun")
     void StartFire();

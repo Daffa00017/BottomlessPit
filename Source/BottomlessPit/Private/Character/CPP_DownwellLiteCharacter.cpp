@@ -5,8 +5,11 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/SceneComponent.h"
+#include "Components/BoxComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/CharacterMovementComponent.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogStomp, Log, All);
 
 ACPP_DownwellLiteCharacter::ACPP_DownwellLiteCharacter()
 {
@@ -16,6 +19,16 @@ ACPP_DownwellLiteCharacter::ACPP_DownwellLiteCharacter()
     GetCharacterMovement()->GravityScale = 1.0f;   // make it fall faster
     GetCharacterMovement()->AirControl = 1.0f;   // more air mobility
     GetCharacterMovement()->JumpZVelocity = JumpHeight;
+
+    //StompSensor
+    StompSensor = CreateDefaultSubobject<UBoxComponent>(TEXT("StompSensor"));
+    StompSensor->SetupAttachment(GetRootComponent());
+    StompSensor->SetBoxExtent(StompSensorExtent);
+    StompSensor->SetRelativeLocation(FVector(0.f, 0.f, StompSensorOffsetZ));
+    StompSensor->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    StompSensor->SetCollisionObjectType(ECC_Pawn);
+    StompSensor->SetGenerateOverlapEvents(false);
+    StompSensor->SetCanEverAffectNavigation(false);
 }
 
 void ACPP_DownwellLiteCharacter::Tick(float DeltaSeconds)
@@ -30,6 +43,7 @@ void ACPP_DownwellLiteCharacter::Tick(float DeltaSeconds)
         LastRotationUpdateTime = CurrentTime; // Update timestamp
         UpdateControllerRotation();
     }
+
 }
 
 void ACPP_DownwellLiteCharacter::JumpFunction()
@@ -61,6 +75,59 @@ void ACPP_DownwellLiteCharacter::JumpFunction()
         //UE_LOG(LogTemp, Warning, TEXT("CurrentAmmoCount: %d"), CurrentAmmoCount);
     
 
+    }
+}
+
+void ACPP_DownwellLiteCharacter::StompMonitorTick()
+{
+    const float Vz = GetVelocity().Z;
+    const bool bFallingFast = (Vz < -StompMinDownSpeed);
+
+    UE_LOG(LogStomp, Verbose, TEXT("[Stomp] MonitorTick: Vz=%.1f  Min=%.1f  FallingFast=%s"),
+        Vz, StompMinDownSpeed, bFallingFast ? TEXT("YES") : TEXT("NO"));
+
+    if (!bFallingFast) return;
+
+    UE_LOG(LogStomp, Log, TEXT("[Stomp] Falling fast detected -> BeginStompActive()"));
+    BeginStompActive();
+
+    // Stop monitoring; we’re latched ON now until Landed.
+    GetWorldTimerManager().ClearTimer(Timer_StompMonitor);
+    UE_LOG(LogStomp, Log, TEXT("[Stomp] Monitor CLEARED (latched active)"));
+}
+
+void ACPP_DownwellLiteCharacter::BeginStompActive()
+{
+    if (bStompActive) return; // already latched
+
+    bStompActive = true;
+    SetStompCollisionEnabled(true);
+
+    UE_LOG(LogStomp, Log, TEXT("[Stomp] ACTIVATED (latched until Landed)"));
+}
+
+void ACPP_DownwellLiteCharacter::SetStompCollisionEnabled(bool bEnabled)
+{
+    if (!StompSensor) return;
+
+    if (bEnabled)
+    {
+        StompSensor->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        StompSensor->SetGenerateOverlapEvents(true);
+        StompSensor->SetCollisionResponseToAllChannels(ECR_Ignore);
+        StompSensor->SetCollisionResponseToChannel(EnemyChannel, ECR_Block);
+
+        StompSensor->SetBoxExtent(StompSensorExtent);
+        StompSensor->SetRelativeLocation(FVector(0.f, 0.f, StompSensorOffsetZ));
+
+        UE_LOG(LogStomp, Verbose, TEXT("[Stomp] Sensor ENABLED (extent=%s, offsetZ=%.1f)"),
+            *StompSensorExtent.ToString(), StompSensorOffsetZ);
+    }
+    else
+    {
+        StompSensor->SetGenerateOverlapEvents(false);
+        StompSensor->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        UE_LOG(LogStomp, Verbose, TEXT("[Stomp] Sensor DISABLED"));
     }
 }
 
@@ -138,6 +205,8 @@ void ACPP_DownwellLiteCharacter::Landed(const FHitResult& Hit)
     IsUpdatingGravity = false;
     ClearIdleConfirmTimer();
     CustomEventOnLanded(Hit);
+    StopStompWatch();
+    UE_LOG(LogStomp, Log, TEXT("[Stomp] Landed -> StopStompWatch()"));
 
     // resolve to ground locomotion
     if (bLeftHeld || bRightHeld)
@@ -174,6 +243,46 @@ void ACPP_DownwellLiteCharacter::InputDownPressed()
 void ACPP_DownwellLiteCharacter::InputDownReleased()
 {
     OnDownSmashCompletedEvent.Broadcast();
+}
+
+void ACPP_DownwellLiteCharacter::StartStompWatch()
+{
+    UE_LOG(LogStomp, Log, TEXT("[Stomp] StartStompWatch()"));
+
+    // Already armed or already active? do nothing.
+    auto& T = GetWorldTimerManager();
+    if (bStompActive || T.IsTimerActive(Timer_StompMonitor))
+    {
+        UE_LOG(LogStomp, Log, TEXT("[Stomp] Ignored: already %s"),
+            bStompActive ? TEXT("ACTIVE") : TEXT("ARMING"));
+        return;
+    }
+
+    // Start arming monitor
+    T.SetTimer(Timer_StompMonitor, this, &ACPP_DownwellLiteCharacter::StompMonitorTick,
+        StompMonitorInterval, true);
+    UE_LOG(LogStomp, Log, TEXT("[Stomp] Monitor STARTED @ %.3fs"), StompMonitorInterval);
+}
+
+void ACPP_DownwellLiteCharacter::StopStompWatch()
+{
+    auto& T = GetWorldTimerManager();
+
+    const bool bMon = T.IsTimerActive(Timer_StompMonitor);
+    T.ClearTimer(Timer_StompMonitor);
+
+    if (bStompActive)
+    {
+        bStompActive = false;
+        SetStompCollisionEnabled(false);
+        UE_LOG(LogStomp, Log, TEXT("[Stomp] STOP: sensor DISABLED (was ACTIVE)  [monitorWas=%s]"),
+            bMon ? TEXT("ON") : TEXT("OFF"));
+    }
+    else
+    {
+        UE_LOG(LogStomp, Log, TEXT("[Stomp] STOP: (not active)  [monitorWas=%s]"),
+            bMon ? TEXT("ON") : TEXT("OFF"));
+    }
 }
 
 

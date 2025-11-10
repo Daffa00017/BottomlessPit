@@ -6,6 +6,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Engine/EngineTypes.h"     // FDamageEvent, FHitResult
 #include "Engine/DamageEvents.h"    // FPointDamageEvent, FRadialDamageEvent, and inline helpers
+#include "PaperSprite.h"
 #include "GameFramework/DamageType.h"
 #include "Engine/HitResult.h"
 
@@ -34,10 +35,11 @@ APlatformStrip::APlatformStrip()
 
 FVector2f APlatformStrip::GetTileSizeUU(UPaperSprite* S) const
 {
-    if (!S) return FVector2f(16.f, 16.f);
-    const float ppuu = FMath::Max(S->GetPixelsPerUnrealUnit(), 0.001f);
-    const FVector2D px = S->GetSourceSize();
-    return FVector2f(px.X / ppuu, px.Y / ppuu);
+    if (!S) return FVector2f::ZeroVector;
+
+    // Platforms are in the XY plane (Z is normal) in your setup.
+    const FBoxSphereBounds B = S->GetRenderBounds();
+    return FVector2f(B.BoxExtent.X * 2.f, B.BoxExtent.Y * 2.f);
 }
 
 void APlatformStrip::ClearBuiltTiles()

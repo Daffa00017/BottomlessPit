@@ -25,6 +25,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnEnemyAnimsLoaded, const FEnemyAni
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnEnemyAnimsFailed);
 
+UENUM()
+enum class EEnemyLifeState : uint8 { Active, Dying, Pooled };
+
 UCLASS()
 class BOTTOMLESSPIT_API ACPP_EnemyParent : public APawn
 {
@@ -74,6 +77,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "AI|State")
 	void SetAIMoveState(EAIMovementState NewState);
 
+	UPROPERTY(BlueprintReadOnly, Category = "Life")
+	EEnemyLifeState LifeState = EEnemyLifeState::Pooled;
+	EEnemyLifeState GetLifeState() const { return LifeState; }
+
+	UFUNCTION(BlueprintCallable) void BeginDeath();
+	UFUNCTION(BlueprintCallable) void Notify_DeathAnimFinished();
+
 	UPROPERTY(BlueprintAssignable, Category = "AI|State")
 	FOnAIMoveStateChanged OnAIMoveStateChanged;
 
@@ -101,11 +111,20 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "AI|Anim")
 	TSubclassOf<UPaperZDAnimInstance> BodyAnimInstanceClass;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MinAI|Collision")
+	TEnumAsByte<ECollisionChannel> PlayerChannel = ECC_Pawn;     
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MinAI|Collision")
+	TEnumAsByte<ECollisionChannel> ProjectileChannel = ECC_Pawn;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MinAI|Collision")
+	TEnumAsByte<ECollisionChannel> BulletChannel = ECC_GameTraceChannel1;
+
 	//Pool Enemy
 
 	bool bActive = false;
 
-	UFUNCTION(BlueprintCallable) bool IsActive() const { return bActive; }
+	UFUNCTION(BlueprintCallable) bool IsActive() const { return LifeState == EEnemyLifeState::Active; }
 
 	UFUNCTION(BlueprintCallable)
 	virtual void ActivateFromPool(const FVector& WorldPos);
@@ -123,6 +142,14 @@ public:
 	UFUNCTION(BlueprintImplementableEvent) void OnPooledActivated();
 	UFUNCTION(BlueprintImplementableEvent) void OnPooledDeactivated();
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pool")
+	float MinReuseDelay = 0.25f;
+	float PooledAtTime = -1000.f;
+
+	FTimerHandle Timer_DeferredActivate;
+	FVector PendingActivatePos = FVector::ZeroVector;
+	bool bPendingActivate = false;
+
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
@@ -135,6 +162,15 @@ protected:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animations")
 	UDataTable* AnimationDataTable;
+
+	void SetOverlapEnabled(bool bEnabled);
+	bool IsDamageActive() const { return LifeState == EEnemyLifeState::Active; }
+	void ConfigureCollision_Active();
+	void ConfigureCollision_Dying();   
+	void ConfigureCollision_Pooled();
+
+	void ActivateNow_Internal(const FVector& WorldPos);
+	UFUNCTION() void DeferredActivateFromPool();
 
 private:
 	/** This UPROPERTY() is crucial to stop the async action from being garbage collected. */

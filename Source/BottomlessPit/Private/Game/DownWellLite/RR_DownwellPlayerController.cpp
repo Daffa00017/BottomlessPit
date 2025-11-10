@@ -19,11 +19,6 @@ void ARR_DownwellPlayerController::BeginPlay()
 void ARR_DownwellPlayerController::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
-    static const FKey WheelAxisKey(TEXT("RawInput.Axis0")); // replace with your key
-    const float v = GetInputAnalogKeyState(WheelAxisKey);
-
-    GEngine->AddOnScreenDebugMessage(-1, 0.f, FColor::Cyan,
-        FString::Printf(TEXT("Wheel = %.3f"), v));
 }
 
 
@@ -48,14 +43,9 @@ void ARR_DownwellPlayerController::SetupInputComponent()
 
         if (IA_MoveX)
         {
+            EIC->BindAction(IA_MoveX, ETriggerEvent::Started, this, &ThisClass::OnMoveX_Started);
             EIC->BindAction(IA_MoveX, ETriggerEvent::Triggered, this, &ThisClass::OnMoveX_Triggered);
             EIC->BindAction(IA_MoveX, ETriggerEvent::Completed, this, &ThisClass::OnMoveX_Completed);
-        }
-
-        if (IA_Steer)
-        {
-            EIC->BindAction(IA_Steer, ETriggerEvent::Triggered, this, &ThisClass::OnSteer_Triggered);
-            EIC->BindAction(IA_Steer, ETriggerEvent::Completed, this, &ThisClass::OnSteer_Completed);
         }
 
         if (IA_Jump)
@@ -71,6 +61,12 @@ void ARR_DownwellPlayerController::SetupInputComponent()
             EIC->BindAction(IA_MoveDown, ETriggerEvent::Triggered, this, &ARR_DownwellPlayerController::OnDownTriggered);
             EIC->BindAction(IA_MoveDown, ETriggerEvent::Completed, this, &ARR_DownwellPlayerController::OnDownCompleted);
         }
+
+        if (IA_Escape)
+        {
+            EIC->BindAction(IA_Escape, ETriggerEvent::Started, this, &ARR_DownwellPlayerController::OnEscapeStarted);
+            EIC->BindAction(IA_Escape, ETriggerEvent::Completed, this, &ARR_DownwellPlayerController::OnEscapeCompleted);
+        }
     }
 }
 
@@ -79,44 +75,87 @@ ACPP_DownwellLiteCharacter* ARR_DownwellPlayerController::GetDWChar() const
     return Cast<ACPP_DownwellLiteCharacter>(GetPawn());
 }
 
+void ARR_DownwellPlayerController::TryTriggerFirstInput()
+{
+    if (bIsFirstInputCooldownActive)
+    {
+        return; 
+    }
+    bIsFirstInputCooldownActive = true;
+    OnFirstInput();
+    GetWorld()->GetTimerManager().SetTimer(
+        TimerHandle_FirstInputCooldown,
+        this,
+        &ARR_DownwellPlayerController::ResetFirstInputCooldown,
+        AcceptNextFirstInputDur,
+        false);
+}
+
+void ARR_DownwellPlayerController::ResetFirstInputCooldown()
+{
+    bIsFirstInputCooldownActive = false;
+}
+
 void ARR_DownwellPlayerController::OnLeftStarted(const FInputActionValue&)
 {
-    bLeftHeld = true;  
-    SendCombinedAxis();
+    bLeftHeld = true;
+    OnFirstInput();
+    if (!IsPlayerDead)
+    {
+        SendCombinedAxis();
+    }
 }
 
 void ARR_DownwellPlayerController::OnLeftTriggered(const FInputActionValue&)
 {
     bLeftHeld = true;
-    SendCombinedAxis();
+    if (!IsPlayerDead)
+    {
+        SendCombinedAxis();
+    }
 }
 
 void ARR_DownwellPlayerController::OnLeftCompleted(const FInputActionValue&)
 {
     bLeftHeld = false;
-    SendCombinedAxis();
+    OnFirstInput();
+    if (!IsPlayerDead)
+    {
+        SendCombinedAxis();
+    }
 }
 
 void ARR_DownwellPlayerController::OnRightStarted(const FInputActionValue&)
 {
     bRightHeld = true;  
-    SendCombinedAxis();
+    OnFirstInput();
+    if (!IsPlayerDead)
+    {
+        SendCombinedAxis();
+    }
 }
 
 void ARR_DownwellPlayerController::OnRightTriggered(const FInputActionValue&)
 {
     bRightHeld = true;
-    SendCombinedAxis();
+    if (!IsPlayerDead)
+    {
+        SendCombinedAxis();
+    }
 }
 
 void ARR_DownwellPlayerController::OnRightCompleted(const FInputActionValue&)
 {
-    bRightHeld = false;  
-    SendCombinedAxis();
+    bRightHeld = false; 
+    if (!IsPlayerDead)
+    {
+        SendCombinedAxis();
+    }
 }
 
 void ARR_DownwellPlayerController::OnDownStarted(const FInputActionValue&)
 {
+    OnFirstInput();
     if (auto* C = GetDWChar())
         C->InputDownPressed();
 }
@@ -133,69 +172,102 @@ void ARR_DownwellPlayerController::OnDownCompleted(const FInputActionValue&)
 
 void ARR_DownwellPlayerController::SendCombinedAxis()
 {
-    // Right = +1, Left = -1, Both = 0 (your desired behavior)
-        const int Axis = (bRightHeld ? 1 : 0) - (bLeftHeld ? 1 : 0);
-    if (auto* C = GetDWChar())
+    if (!IsPlayerDead) 
     {
-        C->SetMoveAxis(static_cast<float>(Axis));
-        // If you want your Walk/Idle transitions like before, you can also:
-        // if (Axis != 0) C->CommitWalkIfStillDirected(); else C->ScheduleIdleConfirm();
+            const int Axis = (bRightHeld ? 1 : 0) - (bLeftHeld ? 1 : 0);
+        if (auto* C = GetDWChar())
+        {
+            C->SetMoveAxis(static_cast<float>(Axis));
+        }
     }
 }
 
 void ARR_DownwellPlayerController::OnJumpStarted(const FInputActionValue&) 
 { 
-    if (auto* C = GetDWChar()) 
-        C->InputJumpPressed(); 
+    if (ConfirmToExit) 
+    {
+      OnQuitGame();
+    } else {
+        OnFirstInput();
+        if (!IsPlayerDead)
+        {
+            if (auto* C = GetDWChar())
+                C->InputJumpPressed();
+        }
+    }
 }
 
 void ARR_DownwellPlayerController::OnJumpTriggered(const FInputActionValue&)
 {
-    if (auto* C = GetDWChar())
-        C->InputJumpTriggered();
+    if (!IsPlayerDead)
+    {
+        if (auto* C = GetDWChar())
+            C->InputJumpTriggered();
+    }
 }
 
 void ARR_DownwellPlayerController::OnJumpCompleted(const FInputActionValue&) 
 { 
-    if (auto* C = GetDWChar()) 
-        C->InputJumpReleased(); 
+    if (!IsPlayerDead)
+    {
+        if (auto* C = GetDWChar())
+            C->InputJumpReleased();
+    }
+}
+
+void ARR_DownwellPlayerController::OnMoveX_Started(const FInputActionValue& Value)
+{
+    OnFirstInput();
+    if (!IsPlayerDead)
+    {
+        float Axis = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
+        // Safety deadzone (optional; IMC deadzone should already handle it)
+        if (FMath::Abs(Axis) < 0.2f) Axis = 0.f;
+
+        if (auto* C = GetDWChar())
+            C->SetMoveAxis(Axis);
+    }
 }
 
 void ARR_DownwellPlayerController::OnMoveX_Triggered(const FInputActionValue& Value)
 {
-    float Axis = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
-    // Safety deadzone (optional; IMC deadzone should already handle it)
-    if (FMath::Abs(Axis) < 0.2f) Axis = 0.f;
+    if (!IsPlayerDead)
+    {
+        float Axis = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
+        // Safety deadzone (optional; IMC deadzone should already handle it)
+        if (FMath::Abs(Axis) < 0.2f) Axis = 0.f;
 
-    if (auto* C = GetDWChar())
-        C->SetMoveAxis(Axis);
+        if (auto* C = GetDWChar())
+            C->SetMoveAxis(Axis);
+    }
 }
 
 void ARR_DownwellPlayerController::OnMoveX_Completed(const FInputActionValue& Value)
 {
-    if (auto* C = GetDWChar())
-        C->SetMoveAxis(0.f);
+    if (!IsPlayerDead)
+    {
+        if (auto* C = GetDWChar())
+            C->SetMoveAxis(0.f);
+    }
 }
 
-void ARR_DownwellPlayerController::OnSteer_Triggered(const FInputActionValue& Value)
+void ARR_DownwellPlayerController::OnEscapeStarted(const FInputActionValue&)
 {
-    float Axis = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
-    // Optional safety deadzone if your IMC deadzone is low:
-    if (FMath::Abs(Axis) < 0.06f) Axis = 0.f;
-    const float x = Value.Get<float>();
-    UE_LOG(LogTemp, Log, TEXT("Steering = %.3f"), x);
-
-
-    if (auto* C = GetDWChar())
-        C->SetMoveAxis(Axis);
-
+    if (!IsPlayerDead)
+    {
+        OnEscapeInput();
+    }
 }
 
-void ARR_DownwellPlayerController::OnSteer_Completed(const FInputActionValue& Value)
+void ARR_DownwellPlayerController::OnEscapeCompleted(const FInputActionValue&)
 {
-    if (auto* C = GetDWChar())
-        C->SetMoveAxis(0.f);
+    if (!IsPlayerDead)
+    {
+
+    }
 }
+
+
 
 
 

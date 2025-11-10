@@ -64,6 +64,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "MinAI|Collision")
 	TEnumAsByte<ECollisionChannel> GroundChannel = ECC_Visibility;
 
+
 private:
 	// state
 	bool  bAIOn = false;

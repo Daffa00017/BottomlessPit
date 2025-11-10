@@ -8,6 +8,12 @@ UCLASS()
 class BOTTOMLESSPIT_API UCPP_GameplayUI : public UUserWidget
 {
     GENERATED_BODY()
+
+	void TickWhilePaused(float DeltaTime);
+
+protected:
+	
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 };
 
 

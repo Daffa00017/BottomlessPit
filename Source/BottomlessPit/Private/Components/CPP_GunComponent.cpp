@@ -14,19 +14,6 @@ UCPP_GunComponent::UCPP_GunComponent()
 	// ...
 }
 
-
-void UCPP_GunComponent::SpawnAndAttachGun(USceneComponent* AttachTo, FName Socket)
-{
-	if (!GetWorld() || !GunClass || !AttachTo) return;
-
-	FActorSpawnParameters P; P.Owner = GetOwner();
-	CurrentGunActor = GetWorld()->SpawnActor<AActor>(GunClass, FTransform::Identity, P);
-	if (!CurrentGunActor) return;
-
-	CurrentGunActor->AttachToComponent(AttachTo, FAttachmentTransformRules::SnapToTargetNotIncludingScale, Socket);
-
-}
-
 void UCPP_GunComponent::StartFire()
 {
 	const float Interval = ShotInterval();

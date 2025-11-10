@@ -12,6 +12,7 @@
 #include "Utility/Util_BpAsyncEnemyAnim.h"
 #include "AIController.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogEnemy, Log, All);
 
 // Sets default values
 ACPP_EnemyParent::ACPP_EnemyParent()
@@ -45,6 +46,96 @@ ACPP_EnemyParent::ACPP_EnemyParent()
 	BodyAnim = CreateDefaultSubobject<UPaperZDAnimationComponent>(TEXT("PC_BodyAnim"));
 }
 
+void ACPP_EnemyParent::SetOverlapEnabled(bool bEnabled)
+{
+	if (Capsule)
+	{
+		Capsule->SetGenerateOverlapEvents(bEnabled);
+		Capsule->SetCollisionEnabled(bEnabled ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		if (bEnabled)
+		{
+			Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+			Capsule->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap); // player/channel -> overlap
+		}
+	}
+}
+
+void ACPP_EnemyParent::ConfigureCollision_Active()
+{
+	if (!Capsule) Capsule = FindComponentByClass<UCapsuleComponent>();
+	if (!Capsule) return;
+
+	Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Capsule->SetGenerateOverlapEvents(true);
+	Capsule->SetCollisionObjectType(ECC_Pawn);
+
+	Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+	// Overlap player so we can detect touch/hurt, etc.
+	Capsule->SetCollisionResponseToChannel(PlayerChannel, ECR_Overlap);
+	Capsule->SetCollisionResponseToChannel(ProjectileChannel, ECR_Block);
+	// Block bullet traces/projectiles (trace or object channel—BP sets which one)
+	Capsule->SetCollisionResponseToChannel(BulletChannel, ECR_Block);
+}
+
+void ACPP_EnemyParent::ConfigureCollision_Dying()
+{
+	if (!Capsule) Capsule = FindComponentByClass<UCapsuleComponent>();
+	if (!Capsule) return;
+
+	// During the death anim: be invisible to gameplay
+	Capsule->SetGenerateOverlapEvents(false);
+	Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+	// (Explicitly ignore both to be crystal clear)
+	Capsule->SetCollisionResponseToChannel(PlayerChannel, ECR_Ignore);
+	Capsule->SetCollisionResponseToChannel(BulletChannel, ECR_Ignore);
+	Capsule->SetCollisionResponseToChannel(ProjectileChannel, ECR_Ignore);
+}
+
+void ACPP_EnemyParent::ConfigureCollision_Pooled()
+{
+	if (!Capsule) Capsule = FindComponentByClass<UCapsuleComponent>();
+	if (!Capsule) return;
+
+	Capsule->SetGenerateOverlapEvents(false);
+	Capsule->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Capsule->SetCollisionResponseToAllChannels(ECR_Ignore);
+}
+
+void ACPP_EnemyParent::ActivateNow_Internal(const FVector& WorldPos)
+{
+	// visible & ticking
+	SetActorLocation(WorldPos);
+	SetActorHiddenInGame(false);
+	SetActorTickEnabled(true);
+
+	// collision for gameplay
+	ConfigureCollision_Active();
+
+	// reset health if present
+	if (HealthComp)
+	{
+		HealthComp->isDead = false;
+		HealthComp->SetCurrentHealth(HealthComp->GetMaxHealth());
+	}
+	if (Sprite) Sprite->SetVisibility(true, true);
+
+	LifeState = EEnemyLifeState::Active;
+	bActive = true;
+
+	UE_LOG(LogEnemy, Log, TEXT("[ENEMY] ACTIVATE  %s  this=%p  Pos=(%.0f,%.0f,%.0f)"),
+		*GetName(), this, WorldPos.X, WorldPos.Y, WorldPos.Z);
+
+	// (Optional) BP hook
+	OnPooledActivated();
+}
+
+void ACPP_EnemyParent::DeferredActivateFromPool()
+{
+	bPendingActivate = false;
+	ActivateNow_Internal(PendingActivatePos);
+}
+
 void ACPP_EnemyParent::HandleAnimsLoaded_Internal(FName RowName, const FEnemyAnimResolved& Anim)
 {
 	UE_LOG(LogTemp, Log, TEXT("Anims loaded for: %s"), *RowName.ToString());
@@ -74,28 +165,74 @@ void ACPP_EnemyParent::SetAIMoveState(EAIMovementState NewState)
 	OnAIMoveStateChanged.Broadcast(Old, NewState);
 }
 
+void ACPP_EnemyParent::BeginDeath()
+{
+	// Already dying or pooled? nothing to do.
+	if (LifeState == EEnemyLifeState::Dying || LifeState == EEnemyLifeState::Pooled)
+		return;
+
+	// Transition: Active -> Dying
+	LifeState = EEnemyLifeState::Dying;
+	bActive = false;
+
+	if (HealthComp) HealthComp->isDead = true;
+	ConfigureCollision_Dying();
+
+	UE_LOG(LogEnemy, Warning, TEXT("[ENEMY] BEGIN_DEATH %s this=%p t=%.3f (LifeState=Dying)"),
+		*GetName(), this, GetWorld()->TimeSeconds);
+}
+
+void ACPP_EnemyParent::Notify_DeathAnimFinished()
+{
+	SetActorHiddenInGame(true);
+	DeactivateToPool();
+}
+
 void ACPP_EnemyParent::ActivateFromPool(const FVector& WorldPos)
 {
-	HealthComp->isDead = false;
-	HealthComp->SetCurrentHealth(HealthComp->GetMaxHealth());
+	// Do NOT allow reuse while the death animation hasn't finished.
+	if (LifeState == EEnemyLifeState::Dying)
+	{
+		UE_LOG(LogEnemy, Warning, TEXT("[ENEMY] ACTIVATE IGNORED (still Dying) %s this=%p"),
+			*GetName(), this);
+		return;
+	}
+
+	// Transition: Pooled -> Active
+	LifeState = EEnemyLifeState::Active;
+	bActive = true;
+
 	SetActorLocation(WorldPos);
 	SetActorHiddenInGame(false);
 	SetActorTickEnabled(true);
-	SetActorEnableCollision(true);
-	EAIMovementState::Idle;
-	bActive = true;
-	OnPooledActivated();
-	// reset movement / state here
+
+	ConfigureCollision_Active();
+
+	if (HealthComp)
+	{
+		HealthComp->isDead = false;
+		HealthComp->SetCurrentHealth(HealthComp->GetMaxHealth());
+	}
+	if (Sprite) Sprite->SetVisibility(true, true);
+
+	UE_LOG(LogEnemy, Log, TEXT("[ENEMY] ACTIVATE %s this=%p Pos=(%.0f,%.0f,%.0f) (LifeState=Active)"),
+		*GetName(), this, WorldPos.X, WorldPos.Y, WorldPos.Z);
 }
 
 void ACPP_EnemyParent::DeactivateToPool()
 {
-	HealthComp->isDead = true;
-	
-	SetActorEnableCollision(false);
+	// Transition: Dying/Active -> Pooled
+	LifeState = EEnemyLifeState::Pooled;
 	bActive = false;
-	OnPooledDeactivated();
-	// clear targets, velocities, etc.
+
+	ConfigureCollision_Pooled();
+
+	SetActorTickEnabled(false);
+	SetActorHiddenInGame(true);
+	SetActorLocation(FVector(0.f, -100000.f, -100000.f)); // park
+
+	UE_LOG(LogEnemy, Log, TEXT("[ENEMY] DEACTIVATE %s this=%p t=%.3f (LifeState=Pooled)"),
+		*GetName(), this, GetWorld()->TimeSeconds);
 }
 
 // Called when the game starts or when spawned

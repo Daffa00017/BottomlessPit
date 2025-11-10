@@ -8,15 +8,19 @@ public class BottomlessPit : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 	
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", 
-															"CoreUObject", 
-															"Engine", 
-															"InputCore", 
-															"EnhancedInput",
-															"UMG", 
-															"Slate",
-															"SlateCore",
-															"PaperZD"});
+		PublicDependencyModuleNames.AddRange(new string[] 
+		{ 
+			"Core", 
+			"CoreUObject", 
+			"Engine", 
+			"InputCore", 
+			"EnhancedInput",
+			"UMG", 
+			"Slate",
+			"SlateCore",
+			"PaperZD",
+			"Paper2D"
+		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 
