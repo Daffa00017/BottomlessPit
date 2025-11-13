@@ -46,6 +46,12 @@ void ACPP_GM_BottomlessPit::StopScoring()
     GetWorldTimerManager().ClearTimer(DepthCheckTimerHandle);
 }
 
+void ACPP_GM_BottomlessPit::AddScore(float Amount)
+{
+    PlayerScore = PlayerScore+Amount;
+    OnScoreUpdated.Broadcast(PlayerScore);
+}
+
 void ACPP_GM_BottomlessPit::CheckPlayerDepth()
 {
 
@@ -78,6 +84,7 @@ void ACPP_GM_BottomlessPit::UpdateScore(float Amount)
 
     OnScoreUpdated.Broadcast(PlayerScore);
 }
+
 
 
 

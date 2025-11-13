@@ -123,8 +123,8 @@ void ACPP_EnemyParent::ActivateNow_Internal(const FVector& WorldPos)
 	LifeState = EEnemyLifeState::Active;
 	bActive = true;
 
-	UE_LOG(LogEnemy, Log, TEXT("[ENEMY] ACTIVATE  %s  this=%p  Pos=(%.0f,%.0f,%.0f)"),
-		*GetName(), this, WorldPos.X, WorldPos.Y, WorldPos.Z);
+	/*UE_LOG(LogEnemy, Log, TEXT("[ENEMY] ACTIVATE  %s  this=%p  Pos=(%.0f,%.0f,%.0f)"),
+		*GetName(), this, WorldPos.X, WorldPos.Y, WorldPos.Z);*/
 
 	// (Optional) BP hook
 	OnPooledActivated();
@@ -138,7 +138,7 @@ void ACPP_EnemyParent::DeferredActivateFromPool()
 
 void ACPP_EnemyParent::HandleAnimsLoaded_Internal(FName RowName, const FEnemyAnimResolved& Anim)
 {
-	UE_LOG(LogTemp, Log, TEXT("Anims loaded for: %s"), *RowName.ToString());
+	/*UE_LOG(LogTemp, Log, TEXT("Anims loaded for: %s"), *RowName.ToString());*/
 
 	// 1. Store the anims so you can use them in C++
 	ResolvedAnims = Anim;
@@ -151,7 +151,7 @@ void ACPP_EnemyParent::HandleAnimsLoaded_Internal(FName RowName, const FEnemyAni
 
 void ACPP_EnemyParent::HandleAnimLoadFailed_Internal()
 {
-	UE_LOG(LogTemp, Error, TEXT("FAILED to load anims for row: %s"), *AnimationRowName.ToString());
+	/*UE_LOG(LogTemp, Error, TEXT("FAILED to load anims for row: %s"), *AnimationRowName.ToString());*/
 
 	// Broadcast the BLUEPRINT fail delegate
 	OnAnimsLoadFailed.Broadcast();
@@ -178,8 +178,8 @@ void ACPP_EnemyParent::BeginDeath()
 	if (HealthComp) HealthComp->isDead = true;
 	ConfigureCollision_Dying();
 
-	UE_LOG(LogEnemy, Warning, TEXT("[ENEMY] BEGIN_DEATH %s this=%p t=%.3f (LifeState=Dying)"),
-		*GetName(), this, GetWorld()->TimeSeconds);
+	/*UE_LOG(LogEnemy, Warning, TEXT("[ENEMY] BEGIN_DEATH %s this=%p t=%.3f (LifeState=Dying)"),
+		*GetName(), this, GetWorld()->TimeSeconds);*/
 }
 
 void ACPP_EnemyParent::Notify_DeathAnimFinished()
@@ -193,8 +193,8 @@ void ACPP_EnemyParent::ActivateFromPool(const FVector& WorldPos)
 	// Do NOT allow reuse while the death animation hasn't finished.
 	if (LifeState == EEnemyLifeState::Dying)
 	{
-		UE_LOG(LogEnemy, Warning, TEXT("[ENEMY] ACTIVATE IGNORED (still Dying) %s this=%p"),
-			*GetName(), this);
+		/*UE_LOG(LogEnemy, Warning, TEXT("[ENEMY] ACTIVATE IGNORED (still Dying) %s this=%p"),
+			*GetName(), this);*/
 		return;
 	}
 
@@ -215,8 +215,8 @@ void ACPP_EnemyParent::ActivateFromPool(const FVector& WorldPos)
 	}
 	if (Sprite) Sprite->SetVisibility(true, true);
 
-	UE_LOG(LogEnemy, Log, TEXT("[ENEMY] ACTIVATE %s this=%p Pos=(%.0f,%.0f,%.0f) (LifeState=Active)"),
-		*GetName(), this, WorldPos.X, WorldPos.Y, WorldPos.Z);
+	/*UE_LOG(LogEnemy, Log, TEXT("[ENEMY] ACTIVATE %s this=%p Pos=(%.0f,%.0f,%.0f) (LifeState=Active)"),
+		*GetName(), this, WorldPos.X, WorldPos.Y, WorldPos.Z);*/
 }
 
 void ACPP_EnemyParent::DeactivateToPool()
@@ -231,8 +231,8 @@ void ACPP_EnemyParent::DeactivateToPool()
 	SetActorHiddenInGame(true);
 	SetActorLocation(FVector(0.f, -100000.f, -100000.f)); // park
 
-	UE_LOG(LogEnemy, Log, TEXT("[ENEMY] DEACTIVATE %s this=%p t=%.3f (LifeState=Pooled)"),
-		*GetName(), this, GetWorld()->TimeSeconds);
+	/*UE_LOG(LogEnemy, Log, TEXT("[ENEMY] DEACTIVATE %s this=%p t=%.3f (LifeState=Pooled)"),
+		*GetName(), this, GetWorld()->TimeSeconds);*/
 }
 
 // Called when the game starts or when spawned
@@ -273,7 +273,7 @@ void ACPP_EnemyParent::BeginPlay()
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Enemy '%s' has no AnimationDataTable or AnimationRowName set."), *GetName());
+		/*UE_LOG(LogTemp, Warning, TEXT("Enemy '%s' has no AnimationDataTable or AnimationRowName set."), *GetName());*/
 		// Instantly fire the fail delegate
 		OnAnimsLoadFailed.Broadcast();
 	}

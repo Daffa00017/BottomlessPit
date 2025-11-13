@@ -43,7 +43,19 @@ struct FProjectileStats
 	bool bUseFixedStep = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats")
+	bool bPenetrate = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats")
 	float FixedStepHz = 120.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats")
+	float CamShakeScale = 1.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats")
+	float HitstopDur = 0.025f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stats")
+	float HitstopMinDil = 0.02f;
 };
 
 /**

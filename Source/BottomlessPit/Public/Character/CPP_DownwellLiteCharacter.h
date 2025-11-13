@@ -45,7 +45,7 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Input|Delegates") FOnDownSmashStarted      OnDownSmashStartedEvent;
 	UPROPERTY(BlueprintAssignable, Category = "Input|Delegates") FOnDownSmashCompleted    OnDownSmashCompletedEvent;
 
-	UPROPERTY(BlueprintReadWrite, category = "Variable | Movement | Jump")
+	UPROPERTY(BlueprintReadWrite,EditAnywhere ,  category = "Variable | Movement | Jump")
 	int CurrentAmmoCount = MaxAmmoCount;
 
 	UPROPERTY(BlueprintReadWrite, category = "Variable | Movement | Jump")
@@ -98,7 +98,7 @@ protected :
 	UPROPERTY(EditAnywhere, Category = "Stomp|Collision")
 	TEnumAsByte<ECollisionChannel> EnemyChannel = ECC_GameTraceChannel1;
 
-	UPROPERTY(VisibleAnywhere, Category = "Stomp|Sensor")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stomp|Sensor")
 	UBoxComponent* StompSensor = nullptr;
 
 	UPROPERTY(EditAnywhere, Category = "Stomp|Sensor")

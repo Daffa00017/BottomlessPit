@@ -67,6 +67,12 @@ void ARR_DownwellPlayerController::SetupInputComponent()
             EIC->BindAction(IA_Escape, ETriggerEvent::Started, this, &ARR_DownwellPlayerController::OnEscapeStarted);
             EIC->BindAction(IA_Escape, ETriggerEvent::Completed, this, &ARR_DownwellPlayerController::OnEscapeCompleted);
         }
+
+        if (IA_Enter)
+        {
+            EIC->BindAction(IA_Enter, ETriggerEvent::Started, this, &ARR_DownwellPlayerController::OnEnterStarted);
+            EIC->BindAction(IA_Enter, ETriggerEvent::Completed, this, &ARR_DownwellPlayerController::OnEnterCompleted);
+        }
     }
 }
 
@@ -100,7 +106,7 @@ void ARR_DownwellPlayerController::OnLeftStarted(const FInputActionValue&)
 {
     bLeftHeld = true;
     OnFirstInput();
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         SendCombinedAxis();
     }
@@ -109,7 +115,7 @@ void ARR_DownwellPlayerController::OnLeftStarted(const FInputActionValue&)
 void ARR_DownwellPlayerController::OnLeftTriggered(const FInputActionValue&)
 {
     bLeftHeld = true;
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         SendCombinedAxis();
     }
@@ -119,7 +125,7 @@ void ARR_DownwellPlayerController::OnLeftCompleted(const FInputActionValue&)
 {
     bLeftHeld = false;
     OnFirstInput();
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         SendCombinedAxis();
     }
@@ -129,7 +135,7 @@ void ARR_DownwellPlayerController::OnRightStarted(const FInputActionValue&)
 {
     bRightHeld = true;  
     OnFirstInput();
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         SendCombinedAxis();
     }
@@ -138,7 +144,7 @@ void ARR_DownwellPlayerController::OnRightStarted(const FInputActionValue&)
 void ARR_DownwellPlayerController::OnRightTriggered(const FInputActionValue&)
 {
     bRightHeld = true;
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         SendCombinedAxis();
     }
@@ -147,7 +153,7 @@ void ARR_DownwellPlayerController::OnRightTriggered(const FInputActionValue&)
 void ARR_DownwellPlayerController::OnRightCompleted(const FInputActionValue&)
 {
     bRightHeld = false; 
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         SendCombinedAxis();
     }
@@ -156,8 +162,11 @@ void ARR_DownwellPlayerController::OnRightCompleted(const FInputActionValue&)
 void ARR_DownwellPlayerController::OnDownStarted(const FInputActionValue&)
 {
     OnFirstInput();
-    if (auto* C = GetDWChar())
-        C->InputDownPressed();
+    if (!IsPlayerDead && !ConfirmToExit)
+    {
+        if (auto* C = GetDWChar())
+            C->InputDownPressed();
+    }
 }
 
 void ARR_DownwellPlayerController::OnDownTriggered(const FInputActionValue&)
@@ -166,13 +175,16 @@ void ARR_DownwellPlayerController::OnDownTriggered(const FInputActionValue&)
 
 void ARR_DownwellPlayerController::OnDownCompleted(const FInputActionValue&)
 {
-    if (auto* C = GetDWChar())
-        C->InputDownReleased();
+    if (!IsPlayerDead && !ConfirmToExit)
+    {
+        if (auto* C = GetDWChar())
+            C->InputDownReleased();
+    }
 }
 
 void ARR_DownwellPlayerController::SendCombinedAxis()
 {
-    if (!IsPlayerDead) 
+    if (!IsPlayerDead && !ConfirmToExit)
     {
             const int Axis = (bRightHeld ? 1 : 0) - (bLeftHeld ? 1 : 0);
         if (auto* C = GetDWChar())
@@ -184,22 +196,17 @@ void ARR_DownwellPlayerController::SendCombinedAxis()
 
 void ARR_DownwellPlayerController::OnJumpStarted(const FInputActionValue&) 
 { 
-    if (ConfirmToExit) 
-    {
-      OnQuitGame();
-    } else {
         OnFirstInput();
-        if (!IsPlayerDead)
+        if (!IsPlayerDead && !ConfirmToExit)
         {
             if (auto* C = GetDWChar())
                 C->InputJumpPressed();
         }
-    }
 }
 
 void ARR_DownwellPlayerController::OnJumpTriggered(const FInputActionValue&)
 {
-    if (!IsPlayerDead)
+    if (!IsPlayerDead&&!ConfirmToExit)
     {
         if (auto* C = GetDWChar())
             C->InputJumpTriggered();
@@ -208,7 +215,7 @@ void ARR_DownwellPlayerController::OnJumpTriggered(const FInputActionValue&)
 
 void ARR_DownwellPlayerController::OnJumpCompleted(const FInputActionValue&) 
 { 
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         if (auto* C = GetDWChar())
             C->InputJumpReleased();
@@ -218,7 +225,7 @@ void ARR_DownwellPlayerController::OnJumpCompleted(const FInputActionValue&)
 void ARR_DownwellPlayerController::OnMoveX_Started(const FInputActionValue& Value)
 {
     OnFirstInput();
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         float Axis = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
         // Safety deadzone (optional; IMC deadzone should already handle it)
@@ -231,7 +238,7 @@ void ARR_DownwellPlayerController::OnMoveX_Started(const FInputActionValue& Valu
 
 void ARR_DownwellPlayerController::OnMoveX_Triggered(const FInputActionValue& Value)
 {
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         float Axis = FMath::Clamp(Value.Get<float>(), -1.f, 1.f);
         // Safety deadzone (optional; IMC deadzone should already handle it)
@@ -244,7 +251,7 @@ void ARR_DownwellPlayerController::OnMoveX_Triggered(const FInputActionValue& Va
 
 void ARR_DownwellPlayerController::OnMoveX_Completed(const FInputActionValue& Value)
 {
-    if (!IsPlayerDead)
+    if (!IsPlayerDead && !ConfirmToExit)
     {
         if (auto* C = GetDWChar())
             C->SetMoveAxis(0.f);
@@ -265,6 +272,21 @@ void ARR_DownwellPlayerController::OnEscapeCompleted(const FInputActionValue&)
     {
 
     }
+}
+
+void ARR_DownwellPlayerController::OnEnterStarted(const FInputActionValue&)
+{
+    if (ConfirmToExit)
+    {
+        OnQuitGame();
+    } else {
+    
+    }
+}
+
+void ARR_DownwellPlayerController::OnEnterCompleted(const FInputActionValue&)
+{
+
 }
 
 

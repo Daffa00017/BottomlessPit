@@ -334,6 +334,9 @@ protected:
 	TSubclassOf<ACPP_EnemyParent> FlyerEnemyClass;
 
 	UPROPERTY(EditAnywhere, Category = "Enemies")
+	TSubclassOf<ACPP_EnemyParent> WalkerAltEnemyClass;
+
+	UPROPERTY(EditAnywhere, Category = "Enemies")
 	int32 MinTilesForWalker = 6;
 
 	UPROPERTY(EditAnywhere, Category = "Enemies")
@@ -363,6 +366,7 @@ protected:
 	UPROPERTY() TArray<TObjectPtr<ACPP_EnemyParent>> WalkerPool;
 	UPROPERTY() TArray<TObjectPtr<ACPP_EnemyParent>> FlyerPool;
 
+
 	float NextWalkerY = -FLT_MAX;
 	float NextFlyerY = -FLT_MAX;
 
@@ -373,7 +377,45 @@ protected:
 	float NextWalkerLocalY = -FLT_MAX;
 	float NextFlyerLocalY = -FLT_MAX;
 
-	
+	// === Endless Z-loop ===
+	UPROPERTY(EditAnywhere, Category = "Endless")
+	bool bEnableZLoop = true;
+
+	// fire loop when player Z < (Generator.Z - LoopThresholdDownUU)
+	UPROPERTY(EditAnywhere, Category = "Endless", meta = (ClampMin = "1000"))
+	float LoopThresholdDownUU = 12000.f;   // ~ 20 screens if 600 uu per screen
+
+	// how far to lift everything when looping (Z only)
+	UPROPERTY(EditAnywhere, Category = "Endless", meta = (ClampMin = "1000"))
+	float LoopSpanUU = 12000.f;            // usually same as threshold for clean chunks
+
+	// optional: extra actors to shift (walls, score billboard, side-scroll camera actor, etc.)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Endless")
+	TArray<AActor*> StickyFollowers;
+
+	// optional: grace so the player doesn’t take contact damage on the loop frame
+	UPROPERTY(EditAnywhere, Category = "Endless")
+	float LoopContactGrace = 0.05f; // 50 ms
+
+	// (store camera here if it’s a separate actor; otherwise leave empty)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Endless")
+	AActor* CameraActor = nullptr;
+
+	// helpers
+	void ZLoopIfNeeded();		
+	void ShiftAllByWorldZ(float DeltaZ);
+
+	// Endless Z-loop helpers
+	bool bJustDidZLoop = false;
+
+	// Spawns missing wall pieces immediately after a Z-loop so the top is covered.
+	void FillWallsAfterLoop();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Endless")
+	bool bUseZLoop = true;
+
+	UFUNCTION(BlueprintCallable, Category = "BottomlessPit|Looping")
+	void RecenterWorldZ(bool bZeroPlayerVelocity /*=true*/);
 
 private:
 

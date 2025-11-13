@@ -36,12 +36,16 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Scoring")
     void StopScoring();
 
+    UFUNCTION(BlueprintCallable, Category = "Scoring")
+    void AddScore(float Amount);
+
     /** Delegate broadcast whenever score changes */
     UPROPERTY(BlueprintAssignable, Category = "Scoring")
     FOnScoreUpdated OnScoreUpdated;
 
     /** Internal function to update score */
     void UpdateScore(float Amount);
+
 
     // How far the player must fall before earning another chunk of score
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Scoring")

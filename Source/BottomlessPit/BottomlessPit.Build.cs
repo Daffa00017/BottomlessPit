@@ -19,8 +19,9 @@ public class BottomlessPit : ModuleRules
 			"Slate",
 			"SlateCore",
 			"PaperZD",
-			"Paper2D"
-		});
+			"Paper2D",
+            "GameplayCameras"
+        });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 

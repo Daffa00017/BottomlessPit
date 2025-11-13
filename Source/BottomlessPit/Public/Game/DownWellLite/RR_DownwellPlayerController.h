@@ -30,6 +30,7 @@ public:
     UPROPERTY(EditDefaultsOnly, Category = "Input|IA") UInputAction* IA_MoveX = nullptr;
     UPROPERTY(EditDefaultsOnly, Category = "Input|IA") UInputAction* IA_Steer = nullptr;
     UPROPERTY(EditDefaultsOnly, Category = "Input|IA") UInputAction* IA_Escape = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category = "Input|IA") UInputAction* IA_Enter = nullptr;
 
     UPROPERTY(BlueprintReadWrite,EditAnywhere, category = "Input|Variable")
     bool IsInMainMenu= false;
@@ -85,6 +86,9 @@ private:
 
     void OnEscapeStarted(const struct FInputActionValue&);
     void OnEscapeCompleted(const struct FInputActionValue&);
+
+    void OnEnterStarted(const struct FInputActionValue&);
+    void OnEnterCompleted(const struct FInputActionValue&);
 
     void SendCombinedAxis(); // compute (-1,0,+1) and forward
 

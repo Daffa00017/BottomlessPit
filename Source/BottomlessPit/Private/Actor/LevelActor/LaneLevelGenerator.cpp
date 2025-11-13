@@ -9,6 +9,9 @@
 #include "GameFramework/Pawn.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Actor/CameraManager/ACPP_DownwellCamera.h"
+#include "GameFramework/MovementComponent.h"
+#include "EngineUtils.h"
 #include "Engine/Engine.h" 
 
 
@@ -107,7 +110,6 @@ void ALaneLevelGenerator::Tick(float DeltaSeconds)
 	if (bSeamsFollowPlayerY) { UpdateSeamPosY(); }
 	if (bDrawDebugSeams) { DrawSeamDebug(); }
 
-
 	if (bSpawnPlatforms)
 	{
 		if (PlatformSpawnStartTime == 0.f)  // Only set this once when spawn starts
@@ -133,9 +135,19 @@ void ALaneLevelGenerator::Tick(float DeltaSeconds)
 			CullOldRows();           // Clean up old platforms
 		}
 	}
+	if (bDrawScaffoldDebug) { DrawScaffoldDebug(); }
 
-	if (bDrawScaffoldDebug) { DrawScaffoldDebug(); } // NEW
-	if (bShowWalls) UpdateWallsInfinite();
+	// >>> Do the Z-loop first so any per-frame wall spawn/cull uses the fresh positions
+	if (bUseZLoop) { ZLoopIfNeeded(); }
+
+	// >>> On the same frame we looped, skip the wall updater to avoid double-spawn
+	if (bShowWalls && !bJustDidZLoop)
+	{
+		UpdateWallsInfinite();
+	}
+
+	// clear one-frame guard at end of tick
+	bJustDidZLoop = false;
 }
 
 void ALaneLevelGenerator::RecomputePlayfield()
@@ -232,7 +244,7 @@ void ALaneLevelGenerator::WarmEnemyPools()
 		TSubclassOf<ACPP_EnemyParent> Cls, int32 Count)
 		{
 			if (!*Cls || Count <= 0) return;
-			Pool.Reserve(Count);
+			Pool.Reserve(Pool.Num() + Count);
 			for (int32 i = 0; i < Count; ++i)
 			{
 				FActorSpawnParameters sp;
@@ -249,7 +261,13 @@ void ALaneLevelGenerator::WarmEnemyPools()
 			}
 		};
 
-	SpawnIntoPool(WalkerPool, WalkerEnemyClass, PoolSize_Walker);
+	// Seed Walker pool with a MIX of regular + ALT so BorrowFromPool can return either.
+	const int32 AltCount = FMath::Max(0, PoolSize_Walker / 2);               // half (floor)
+	const int32 BaseCount = FMath::Max(0, PoolSize_Walker - AltCount);        // rest
+	SpawnIntoPool(WalkerPool, WalkerEnemyClass, BaseCount);
+	SpawnIntoPool(WalkerPool, WalkerAltEnemyClass, AltCount);
+
+	// Flyers unchanged
 	SpawnIntoPool(FlyerPool, FlyerEnemyClass, PoolSize_Flyer);
 }
 
@@ -334,6 +352,194 @@ void ALaneLevelGenerator::RecycleIfOutOfWindow(ACPP_EnemyParent* E, float Player
 	if (enemyLocalY < despawnThresholdLocalY - pad)
 	{
 		E->DeactivateToPool();
+	}
+}
+
+void ALaneLevelGenerator::ZLoopIfNeeded()
+{
+	if (!bEnableZLoop || !PlayerRef) return;
+
+	const FVector GenLoc = GetActorLocation();
+	const FVector PlayerLoc = PlayerRef->GetActorLocation();
+
+	const float triggerZ = GenLoc.Z - LoopThresholdDownUU; // we fall “down” (lower Z)
+	if (PlayerLoc.Z < triggerZ)
+	{
+		// how far past the trigger are we?
+		const float overshoot = triggerZ - PlayerLoc.Z;
+		const int32 k = FMath::FloorToInt(overshoot / LoopSpanUU) + 1;  // at least one chunk
+		const float deltaZ = k * LoopSpanUU; // positive: lift upwards in Z
+
+		ShiftAllByWorldZ(deltaZ);
+	}
+}
+
+void ALaneLevelGenerator::ShiftAllByWorldZ(float DeltaZ)
+{
+	if (FMath::IsNearlyZero(DeltaZ)) return;
+
+	const FVector worldOffset(0.f, 0.f, DeltaZ);
+	const float   deltaLocalY = GetActorTransform().InverseTransformVector(worldOffset).Y;
+
+	// --- carry ALL pooled enemies (cheap, no misses)
+	for (ACPP_EnemyParent* E : WalkerPool)
+		if (E) E->AddActorWorldOffset(worldOffset, false, nullptr, ETeleportType::TeleportPhysics);
+	for (ACPP_EnemyParent* E : FlyerPool)
+		if (E) E->AddActorWorldOffset(worldOffset, false, nullptr, ETeleportType::TeleportPhysics);
+
+	// 1) player
+	if (PlayerRef)
+	{
+		PlayerRef->AddActorWorldOffset(worldOffset, false, nullptr, ETeleportType::TeleportPhysics);
+		if (UWorld* W = GetWorld())
+		{
+			const float until = W->TimeSeconds + LoopContactGrace;
+			// PlayerRef->SetContactGraceUntil(until); // if you implemented it
+		}
+	}
+
+	// 1b) camera (spawned)
+	if (CameraActor)
+	{
+		if (auto* DWCam = Cast<AACPP_DownwellCamera>(CameraActor))
+		{
+			DWCam->NotifyWorldZLoop(DeltaZ);
+		}
+		else
+		{
+			CameraActor->AddActorWorldOffset(FVector(0, 0, DeltaZ), false, nullptr, ETeleportType::TeleportPhysics);
+		}
+	}
+
+	// 3) live strips + cached localY
+	for (FRowBit& Row : LiveRows)
+	{
+		for (TWeakObjectPtr<APlatformStrip>& W : Row.Actors)
+			if (APlatformStrip* A = W.Get())
+				A->AddActorWorldOffset(worldOffset, false, nullptr, ETeleportType::TeleportPhysics);
+
+		Row.LocalY += deltaLocalY;
+	}
+
+	// 4) cursors
+	CursorLocalY += deltaLocalY;
+	NextWalkerLocalY += deltaLocalY;
+	NextFlyerLocalY += deltaLocalY;
+	NextWalkerY += deltaLocalY;
+	NextFlyerY += deltaLocalY;
+
+	// 5) sticky followers
+	for (AActor* A : StickyFollowers)
+		if (A) A->AddActorWorldOffset(worldOffset, false, nullptr, ETeleportType::TeleportPhysics);
+
+	// 6) wall cursors
+	WallTopY += deltaLocalY;
+	WallNextSpawnY += deltaLocalY;
+
+	// === Walls: only top-fill now (instant visual cover), bottom appends next Tick ===
+	FillWallsAfterLoop();
+	bJustDidZLoop = true;
+
+	UE_LOG(LogTemp, Log, TEXT("[ZLoop] +Z=%.0f  deltaLocalY=%.0f  Cursor=%.0f"),
+		DeltaZ, deltaLocalY, CursorLocalY);
+}
+
+void ALaneLevelGenerator::FillWallsAfterLoop()
+{
+	if (WallTileHUU <= 0.f) return;
+
+	const float playerY = (PlayerRef)
+		? GetActorTransform().InverseTransformPosition(PlayerRef->GetActorLocation()).Y
+		: 0.f;
+
+	// Ensure coverage above the visible band (what you see right after a loop “teleport up”)
+	const float wantTopY = playerY
+		- WallsHalfScreensVisible * ScreenWorldHeightUU
+		- WallVerticalTilesPadding * WallTileHUU;
+
+	const float leftX = Xmin + WallInsetX;
+	const float rightX = Xmax - WallInsetX;
+
+	auto PrependPairAt = [&](float y)
+		{
+			// Left
+			UPaperSprite* L = nullptr;
+			for (int t = 0; t < 8 && !L; ++t)
+			{
+				L = WallVariants[FMath::RandHelper(WallVariants.Num())];
+				if (!IsValid(L)) L = nullptr;
+			}
+			if (!L && WallVariants.Num() > 0) L = WallVariants[0];
+
+			auto* SL = NewObject<UPaperSpriteComponent>(this);
+			SL->RegisterComponent();
+			SL->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
+			SL->SetSprite(L);
+			SL->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			SL->SetRelativeRotation(FRotator(0.f, 0.f, WallSpriteRollDeg));
+			SL->SetRelativeLocation(FVector(leftX, y, 0.f));
+			WallSpritesLeft.Insert(SL, 0);
+
+			// Right
+			UPaperSprite* R = nullptr;
+			for (int t = 0; t < 8 && !R; ++t)
+			{
+				R = WallVariants[FMath::RandHelper(WallVariants.Num())];
+				if (!IsValid(R)) R = nullptr;
+			}
+			if (!R && WallVariants.Num() > 0) R = WallVariants[0];
+
+			auto* SR = NewObject<UPaperSpriteComponent>(this);
+			SR->RegisterComponent();
+			SR->AttachToComponent(Root, FAttachmentTransformRules::KeepRelativeTransform);
+			SR->SetSprite(R);
+			SR->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			SR->SetRelativeRotation(FRotator(0.f, 0.f, WallSpriteRollDeg));
+			if (bMirrorRightColumn) SR->SetRelativeScale3D(FVector(-1.f, 1.f, 1.f));
+			SR->SetRelativeLocation(FVector(rightX, y, 0.f));
+			WallSpritesRight.Insert(SR, 0);
+
+			WallTopY -= WallTileHUU;
+		};
+
+	// Start one tile above the current top (if any); otherwise seed from the target top.
+	float nextY = (WallSpritesLeft.Num() > 0 && WallSpritesLeft[0])
+		? (WallSpritesLeft[0]->GetRelativeLocation().Y - WallTileHUU)
+		: wantTopY;
+
+	int guard = 0;
+	while (nextY > wantTopY - 0.5f * WallTileHUU && guard++ < 512)
+	{
+		PrependPairAt(nextY);
+		nextY -= WallTileHUU;
+	}
+
+}
+
+void ALaneLevelGenerator::RecenterWorldZ(bool bZeroPlayerVelocity)
+{
+	if (!PlayerRef) return;
+
+	const float DeltaZ = -PlayerRef->GetActorLocation().Z;
+	if (FMath::IsNearlyZero(DeltaZ, 1.f))
+		return;
+
+	if (bZeroPlayerVelocity)
+	{
+		if (UMovementComponent* MoveComp = PlayerRef->FindComponentByClass<UMovementComponent>())
+		{
+			MoveComp->Velocity = FVector::ZeroVector;
+		}
+	}
+
+	// Shift player/cam/enemies/rows and update cursors
+	ShiftAllByWorldZ(DeltaZ);
+
+	// NEW: immediately reseed the visible wall band near the player
+	if (bShowWalls)
+	{
+		DestroyAllWalls(/*bDisableBlockers*/false);
+		InitWallsInfinite();
 	}
 }
 
@@ -657,7 +863,7 @@ void ALaneLevelGenerator::UpdateWallsInfinite()
 {
 	if (WallTileHUU <= 0.f) return;
 
-	// where the player is (decides when to add/cull), but we DO NOT move existing tiles
+	// Player Y in generator-local space decides when to add/cull; we do NOT move existing tiles.
 	const float playerY = (PlayerRef)
 		? GetActorTransform().InverseTransformPosition(PlayerRef->GetActorLocation()).Y
 		: 0.f;
@@ -665,11 +871,32 @@ void ALaneLevelGenerator::UpdateWallsInfinite()
 	const float leftX = Xmin + WallInsetX;
 	const float rightX = Xmax - WallInsetX;
 
+	// --- Keep WallNextSpawnY in sync with the actual bottom-most tile to avoid double spawns.
+	auto LastY = [](const TArray<UPaperSpriteComponent*>& Arr) -> float
+		{
+			for (int32 i = Arr.Num() - 1; i >= 0; --i)
+				if (Arr[i]) return Arr[i]->GetRelativeLocation().Y;
+			return -FLT_MAX;
+		};
+	{
+		const float lastY = FMath::Max(LastY(WallSpritesLeft), LastY(WallSpritesRight));
+		if (lastY > -FLT_MAX / 2.f)
+		{
+			WallNextSpawnY = FMath::Max(WallNextSpawnY, lastY + WallTileHUU);
+		}
+	}
+
 	// ---- Append below until we’re WallSpawnLeadScreens ahead ----
 	const float wantBottomY = playerY + WallSpawnLeadScreens * ScreenWorldHeightUU;
 
 	auto AppendPairAt = [&](float y)
 		{
+			// Guard: if we somehow got the exact same Y, skip to prevent “double walls”.
+			if (WallSpritesLeft.Num() > 0 && WallSpritesLeft.Last() &&
+				FMath::IsNearlyEqual(WallSpritesLeft.Last()->GetRelativeLocation().Y, y, 0.01f))  return;
+			if (WallSpritesRight.Num() > 0 && WallSpritesRight.Last() &&
+				FMath::IsNearlyEqual(WallSpritesRight.Last()->GetRelativeLocation().Y, y, 0.01f))  return;
+
 			// Left
 			{
 				UPaperSprite* Pick = nullptr;
@@ -738,7 +965,7 @@ void ALaneLevelGenerator::UpdateWallsInfinite()
 	const float faceRightX = rightX - halfW + WallFaceContactInsetUU;
 
 	const float bandHalfUU = WallsHalfScreensVisible * ScreenWorldHeightUU;
-	const float bandCenterY = playerY; // use player for the blocking span only
+	const float bandCenterY = playerY;
 
 	if (LeftWall) { LeftWall->SetRelativeLocation(FVector(faceLeftX, bandCenterY, 0.f));  LeftWall->SetBoxExtent(FVector(WallBlockThicknessUU * 0.5f, bandHalfUU, 2000.f)); }
 	if (RightWall) { RightWall->SetRelativeLocation(FVector(faceRightX, bandCenterY, 0.f)); RightWall->SetBoxExtent(FVector(WallBlockThicknessUU * 0.5f, bandHalfUU, 2000.f)); }
@@ -1108,7 +1335,7 @@ void ALaneLevelGenerator::SpawnRuns(const TArray<FRowRun>& Runs,
 				if (i == 0 || out[i] != out[i - 1])
 					out[w++] = out[i];
 			}
-			out.SetNum(w, /*bAllowShrinking=*/false);
+			out.SetNum(w, EAllowShrinking::No);
 
 			return out;
 		};
@@ -1324,25 +1551,28 @@ void ALaneLevelGenerator::SpawnRuns(const TArray<FRowRun>& Runs,
 
 void ALaneLevelGenerator::TrySpawnEnemyOnStrip(APlatformStrip* Plat, int32 TilesWide, ERunKind RunKind)
 {
-	if(!Plat) return;
+	if (!Plat) return;
 
-	// Compute platform local-Y in generator space (row depth)
+	// Platform "row depth" in generator local space
 	const float localY = GetActorTransform().InverseTransformPosition(Plat->GetActorLocation()).Y;
 
-	// Helper: count active enemies (explicit type to avoid auto-deduction issues)
+	// Count currently-active enemies in a pool
 	auto CountActive = [](const TArray<TObjectPtr<ACPP_EnemyParent>>& Pool) -> int32
 		{
 			int32 n = 0;
-			for (ACPP_EnemyParent* E : Pool) if (E && E->IsActive()) ++n;
+			for (ACPP_EnemyParent* E : Pool)
+			{
+				if (E && E->IsActive()) { ++n; }
+			}
 			return n;
 		};
 
-	// --- Platform top Z from bounds ---
-	FVector PlatOrigin, PlatExtents;
+	// Platform top Z from bounds
+	FVector PlatOrigin(0.f), PlatExtents(0.f);
 	Plat->GetActorBounds(true, /*out*/PlatOrigin, /*out*/PlatExtents);
 	const float PlatformTopZ = PlatOrigin.Z + PlatExtents.Z;
 
-	// --- Enemy half-height from capsule (fallback: root bounds) ---
+	// Enemy half-height (capsule preferred, fallback to root bounds)
 	auto GetEnemyHalfZ = [](UClass* EnemyClass) -> float
 		{
 			if (!EnemyClass) return 0.f;
@@ -1366,7 +1596,7 @@ void ALaneLevelGenerator::TrySpawnEnemyOnStrip(APlatformStrip* Plat, int32 Tiles
 	const bool bGroundOK = (RunKind != ERunKind::SpikeTop);
 
 	// -------------------------
-	// Walker spawn (grounded)
+	// Regular Walker (grounded)
 	// -------------------------
 	if (bGroundOK && WalkerEnemyClass && TilesWide >= MinTilesForWalker)
 	{
@@ -1377,27 +1607,47 @@ void ALaneLevelGenerator::TrySpawnEnemyOnStrip(APlatformStrip* Plat, int32 Tiles
 			if (ACPP_EnemyParent* W = BorrowFromPool(WalkerPool, WalkerEnemyClass, PoolSize_Walker))
 			{
 				FVector Spawn = Plat->GetActorLocation();
-				Spawn.Z = PlatformTopZ + WalkerHalfZ + WalkerHoverZ; // stand on top
+				Spawn.Z = PlatformTopZ + WalkerHalfZ + WalkerHoverZ;
 				W->ActivateFromPool(Spawn);
-				NextWalkerLocalY = localY + WalkerMinDYBetweenSpawnsUU; // advance local-Y gate
+				NextWalkerLocalY = localY + WalkerMinDYBetweenSpawnsUU;
 			}
 		}
 	}
 
-	// -------------------------
-	// Flyer spawn (air)
-	// -------------------------
+	// ------------------------------------------------------
+	// Walker ALT (same behavior; your BP has an extra tag)
+	// Chance = 0.5 * WalkerSpawnChance (shares same gates)
+	// ------------------------------------------------------
+	if (bGroundOK && WalkerAltEnemyClass && TilesWide >= MinTilesForWalker)
+	{
+		if (CountActive(WalkerPool) < MaxActive_Walker &&
+			localY >= NextWalkerLocalY &&
+			FMath::FRand() <= (0.5f * WalkerSpawnChance))
+		{
+			if (ACPP_EnemyParent* WB = BorrowFromPool(WalkerPool, WalkerAltEnemyClass, PoolSize_Walker))
+			{
+				FVector Spawn = Plat->GetActorLocation();
+				Spawn.Z = PlatformTopZ + WalkerHalfZ + WalkerHoverZ;
+				WB->ActivateFromPool(Spawn);
+				NextWalkerLocalY = localY + WalkerMinDYBetweenSpawnsUU;
+			}
+		}
+	}
+
+	// --------------
+	// Flyer (air)
+	// --------------
 	if (FlyerEnemyClass)
 	{
 		if (CountActive(FlyerPool) < MaxActive_Flyer &&
-			localY >= NextFlyerLocalY /* add chance here if desired */)
+			localY >= NextFlyerLocalY)
 		{
 			if (ACPP_EnemyParent* F = BorrowFromPool(FlyerPool, FlyerEnemyClass, PoolSize_Flyer))
 			{
 				FVector Spawn = Plat->GetActorLocation();
-				Spawn.Z = PlatformTopZ + FlyerHalfZ + FlyerSpawnAboveZ; // above platform
+				Spawn.Z = PlatformTopZ + FlyerHalfZ + FlyerSpawnAboveZ;
 				F->ActivateFromPool(Spawn);
-				NextFlyerLocalY = localY + FlyerMinDYBetweenSpawnsUU; // advance local-Y gate
+				NextFlyerLocalY = localY + FlyerMinDYBetweenSpawnsUU;
 			}
 		}
 	}

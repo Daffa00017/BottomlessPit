@@ -51,6 +51,20 @@ FVector AACPP_DownwellCamera::ComputeDesiredLocation(float DeltaSeconds) const
     return Desired;
 }
 
+void AACPP_DownwellCamera::NotifyWorldZLoop(float DeltaZ)
+{
+    // Snap the camera actor by the same world delta (Z only).
+    AddActorWorldOffset(FVector(0.f, 0.f, DeltaZ), false, nullptr, ETeleportType::TeleportPhysics);
+
+    // IMPORTANT: raise the upward clamp so camera is allowed to move up again.
+    LastCameraZ += DeltaZ;
+
+    // If you cache desired/previous locations for smoothing, reset them here to avoid lerp-back.
+    // Example (rename to your vars if you have them):
+    // CachedDesired = GetActorLocation();
+    // bHasCachedDesired = true;
+}
+
 void AACPP_DownwellCamera::BeginPlay()
 {
     Super::BeginPlay();

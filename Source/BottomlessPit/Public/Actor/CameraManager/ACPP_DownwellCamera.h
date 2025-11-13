@@ -38,6 +38,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Variable | CameraManager | DownWell")
 	bool bLockYToZero = true;
 
+	UFUNCTION(BlueprintCallable, Category = "Endless")
+	void NotifyWorldZLoop(float DeltaZ);
+
 
 
 protected:
