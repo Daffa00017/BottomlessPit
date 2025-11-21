@@ -56,6 +56,37 @@ public:
     UFUNCTION(BlueprintImplementableEvent)
     void OnQuitGame();
 
+    UFUNCTION(BlueprintCallable, Category = "Input|Arduino")
+    void ApplyArduinoAccelVector(FVector2D RawXY);
+
+    UFUNCTION(BlueprintCallable, Category = "Input|Arduino")
+    void ApplyArduinoAccelInput(float RawX, float RawY);
+
+    // Tuning params
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input|Arduino")
+    float ArduinoMaxAbsInput = 1.0f;
+    // If your Arduino sends -500..500 or -1023..1023, set this to 500 or 1023.
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input|Arduino")
+    float ArduinoDeadzone = 0.15f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input|Arduino")
+    float ArduinoSensitivity = 1.0f;
+    // Multiplier after normalization.
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input|Arduino")
+    float ArduinoSmoothing = 0.15f;
+    // 0 = no smoothing, 0.1~0.3 feels nice.
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input|Arduino")
+    bool bArduinoUseYForJumpDown = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input|Arduino", meta = (EditCondition = "bArduinoUseYForJumpDown"))
+    float ArduinoJumpThreshold = 0.55f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Input|Arduino", meta = (EditCondition = "bArduinoUseYForJumpDown"))
+    float ArduinoDownThreshold = -0.55f;
+
 
 private:
     // held state (mirrors your character code, but lives in the controller)
@@ -90,12 +121,19 @@ private:
     void OnEnterStarted(const struct FInputActionValue&);
     void OnEnterCompleted(const struct FInputActionValue&);
 
+    UFUNCTION(BlueprintCallable)
     void SendCombinedAxis(); // compute (-1,0,+1) and forward
 
     ACPP_DownwellLiteCharacter* GetDWChar() const;
 
     void TryTriggerFirstInput();
     void ResetFirstInputCooldown();
+
+    float ArduinoSmoothedX = 0.f;
+    bool bArduinoJumpHeld = false;
+    bool bArduinoDownHeld = false;
+
+    void HandleArduinoYActions(float NormY);
 };
 
 

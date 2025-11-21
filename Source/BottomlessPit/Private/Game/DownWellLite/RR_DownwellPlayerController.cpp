@@ -76,6 +76,52 @@ void ARR_DownwellPlayerController::SetupInputComponent()
     }
 }
 
+void ARR_DownwellPlayerController::ApplyArduinoAccelVector(FVector2D RawXY)
+{
+    ApplyArduinoAccelInput(RawXY.X, RawXY.Y);
+}
+
+void ARR_DownwellPlayerController::ApplyArduinoAccelInput(float RawX, float RawY)
+{
+    if (IsPlayerDead || ConfirmToExit)
+    {
+        return;
+    }
+
+    // Normalize to [-1, 1] using ArduinoMaxAbsInput
+    const float SafeMax = FMath::Max(ArduinoMaxAbsInput, 0.001f);
+
+    float NormX = FMath::Clamp(RawX / SafeMax, -1.f, 1.f);
+    float NormY = FMath::Clamp(RawY / SafeMax, -1.f, 1.f);
+
+    // Deadzone
+    if (FMath::Abs(NormX) < ArduinoDeadzone) NormX = 0.f;
+    if (FMath::Abs(NormY) < ArduinoDeadzone) NormY = 0.f;
+
+    // Sensitivity
+    NormX = FMath::Clamp(NormX * ArduinoSensitivity, -1.f, 1.f);
+    NormY = FMath::Clamp(NormY * ArduinoSensitivity, -1.f, 1.f);
+
+    // Optional smoothing on X (simple exponential)
+    if (ArduinoSmoothing > 0.f)
+    {
+        ArduinoSmoothedX = FMath::Lerp(ArduinoSmoothedX, NormX, FMath::Clamp(ArduinoSmoothing, 0.f, 1.f));
+        NormX = ArduinoSmoothedX;
+    }
+
+    // Forward horizontal axis to character
+    if (ACPP_DownwellLiteCharacter* C = GetDWChar())
+    {
+        C->SetMoveAxis(NormX);
+    }
+
+    // Optionally map Y to jump/down
+    if (bArduinoUseYForJumpDown)
+    {
+        HandleArduinoYActions(NormY);
+    }
+}
+
 ACPP_DownwellLiteCharacter* ARR_DownwellPlayerController::GetDWChar() const
 {
     return Cast<ACPP_DownwellLiteCharacter>(GetPawn());
@@ -100,6 +146,40 @@ void ARR_DownwellPlayerController::TryTriggerFirstInput()
 void ARR_DownwellPlayerController::ResetFirstInputCooldown()
 {
     bIsFirstInputCooldownActive = false;
+}
+
+void ARR_DownwellPlayerController::HandleArduinoYActions(float NormY)
+{
+    ACPP_DownwellLiteCharacter* C = GetDWChar();
+    if (!C) return;
+
+    // Jump when tilted up past threshold
+    const bool bShouldJump = (NormY >= ArduinoJumpThreshold);
+    if (bShouldJump && !bArduinoJumpHeld)
+    {
+        bArduinoJumpHeld = true;
+        OnFirstInput();
+        C->InputJumpPressed();
+    }
+    else if (!bShouldJump && bArduinoJumpHeld)
+    {
+        bArduinoJumpHeld = false;
+        C->InputJumpReleased();
+    }
+
+    // Down when tilted down past threshold
+    const bool bShouldDown = (NormY <= ArduinoDownThreshold);
+    if (bShouldDown && !bArduinoDownHeld)
+    {
+        bArduinoDownHeld = true;
+        OnFirstInput();
+        C->InputDownPressed();
+    }
+    else if (!bShouldDown && bArduinoDownHeld)
+    {
+        bArduinoDownHeld = false;
+        C->InputDownReleased();
+    }
 }
 
 void ARR_DownwellPlayerController::OnLeftStarted(const FInputActionValue&)
