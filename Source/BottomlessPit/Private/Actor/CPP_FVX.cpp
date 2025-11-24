@@ -7,12 +7,11 @@
 #include "PaperSpriteComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Utility/Util_BpAsyncVFXFlipbooks.h"
 #include "GameFramework/Character.h"
 
-// Sets default values
 ACPP_FVX::ACPP_FVX()
 {
- 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
 	VFXPivot = CreateDefaultSubobject<USceneComponent>(TEXT("PC_VFXPivot"));
@@ -25,7 +24,6 @@ ACPP_FVX::ACPP_FVX()
 	TrailSprite = CreateDefaultSubobject<UPaperSpriteComponent>(TEXT("PC_TrailSprite"));
 	TrailSprite->SetupAttachment(RootComponent);
 
-	// IMPORTANT: make trail absolute so it won't inherit root moves/rotations
 	TrailSprite->SetUsingAbsoluteLocation(true);
 	TrailSprite->SetUsingAbsoluteRotation(true);
 	TrailSprite->SetUsingAbsoluteScale(true);
@@ -43,43 +41,34 @@ void ACPP_FVX::ActivateTrail(const FVector& From, const FVector& To)
 {
 	if (!TrailSprite || !bTrailReady) return;
 
-	// --- 2D plane clamp (side-scroller) ---
 	FVector S = From, E = To;
 	if (!FMath::IsNaN(ForcePlaneY)) { S.Y = ForcePlaneY; E.Y = ForcePlaneY; }
 
-	// 2D direction & length (XZ)
 	const FVector2D D2(E.X - S.X, E.Z - S.Z);
 	float Len2D = D2.Size();
 	if (Len2D <= KINDA_SMALL_NUMBER) return;
 
-	// Small epsilon so we never visually overrun the impact
 	const float PixelUU = 1.f / FMath::Max(PixelsPerUnit, 0.001f);
 	Len2D = FMath::Max(0.f, Len2D - 0.5f * PixelUU);
 
-	// ---------- FIXED ROTATION ----------
-	// Build a 3D direction in X–Z and let MakeFromX compute the proper Pitch-only rotator.
-	const FVector Dir(D2.X, 0.f, D2.Y);                 // (X, Y=0, Z)
+	const FVector Dir(D2.X, 0.f, D2.Y);                
 	const FRotator Rot = FRotationMatrix::MakeFromX(Dir.GetSafeNormal()).Rotator();
-	// ------------------------------------
 
-	// Absolute transforms (no parent inheritance)
 	TrailSprite->SetUsingAbsoluteLocation(true);
 	TrailSprite->SetUsingAbsoluteRotation(true);
 	TrailSprite->SetUsingAbsoluteScale(true);
 
-	// Place at the start (pivot = Center-Left), stretch along +X
 	const float LocalScaleX = Len2D / CachedBaseLenLocalUU;
 	TrailSprite->SetWorldRotation(Rot);
 	TrailSprite->SetWorldLocation(S, false, nullptr, ETeleportType::TeleportPhysics);
 	TrailSprite->SetWorldScale3D(FVector(LocalScaleX, 1.f, 1.f));
 
-	// Material params
 	if (!TrailMID) TrailMID = TrailSprite->CreateDynamicMaterialInstance(0);
 	if (TrailMID)
 	{
 		TrailMID->SetScalarParameterValue(TEXT("Tiling"), Len2D / FMath::Max(TileWorldUU, 0.001f));
 		TrailMID->SetScalarParameterValue(TEXT("Thickness"), Thickness);
-		TrailMID->SetScalarParameterValue(TEXT("DashFill"), 1.05f); // slight overlap to kill gaps
+		TrailMID->SetScalarParameterValue(TEXT("DashFill"), 1.05f); 
 		TrailMID->SetScalarParameterValue(TEXT("HeadTaper"), HeadTaper);
 		TrailMID->SetScalarParameterValue(TEXT("Fade"), 1.0f);
 		TrailMID->SetScalarParameterValue(TEXT("UseDashes"), bUseDashes ? 1.f : 0.f);
@@ -88,7 +77,6 @@ void ACPP_FVX::ActivateTrail(const FVector& From, const FVector& To)
 	TrailSprite->SetVisibility(true, true);
 	TrailSprite->SetHiddenInGame(false);
 
-	// Timed fade
 	GetWorldTimerManager().ClearTimer(TrailFadeTimer);
 	if (TrailLife > 0.f)
 	{
@@ -127,25 +115,80 @@ void ACPP_FVX::ActivateBulletImpact(UPaperFlipbook* BurstAnim, const FVector& Mu
 	ActivateVFX(BurstAnim, Impact);
 }
 
-// Called when the game starts or when spawned
+void ACPP_FVX::ActivateVFXByName(FName RowName, const FVector& ImpactLoc)
+{
+	if (!VFXDataTable || RowName.IsNone())
+		return;
+
+	if (const FVFXAnimationResolved* Found = CachedRows.Find(RowName))
+	{
+		PlayResolvedLocation(*Found, ImpactLoc);
+		return;
+	}
+
+	if (InFlight.Contains(RowName))
+	{
+		PendingLocations.FindOrAdd(RowName).Add(ImpactLoc);
+		return;
+	}
+
+	PendingLocations.FindOrAdd(RowName).Add(ImpactLoc);
+
+	UUtil_BpAsyncVFXFlipbooks* Loader =
+		UUtil_BpAsyncVFXFlipbooks::LoadVFXFlipbooksRowAsync(this, VFXDataTable, RowName);
+
+	if (!Loader) return;
+
+	InFlight.Add(RowName, Loader);
+	Loader->OnCompleted.AddDynamic(this, &ACPP_FVX::OnLoaderCompleted);
+	Loader->OnFailed.AddDynamic(this, &ACPP_FVX::OnLoaderFailed);
+	Loader->Activate();
+}
+
+void ACPP_FVX::ActivateVFXByNameTransform(FName RowName, const FTransform& WorldTransform)
+{
+	if (!VFXDataTable || RowName.IsNone())
+		return;
+
+	if (const FVFXAnimationResolved* Found = CachedRows.Find(RowName))
+	{
+		PlayResolvedTransform(*Found, WorldTransform);
+		return;
+	}
+
+	if (InFlight.Contains(RowName))
+	{
+		PendingTransforms.FindOrAdd(RowName).Add(WorldTransform);
+		return;
+	}
+
+	PendingTransforms.FindOrAdd(RowName).Add(WorldTransform);
+
+	UUtil_BpAsyncVFXFlipbooks* Loader =
+		UUtil_BpAsyncVFXFlipbooks::LoadVFXFlipbooksRowAsync(this, VFXDataTable, RowName);
+
+	if (!Loader) return;
+
+	InFlight.Add(RowName, Loader);
+	Loader->OnCompleted.AddDynamic(this, &ACPP_FVX::OnLoaderCompleted);
+	Loader->OnFailed.AddDynamic(this, &ACPP_FVX::OnLoaderFailed);
+	Loader->Activate();
+}
+
 void ACPP_FVX::BeginPlay()
 {
 	Super::BeginPlay();
-	//FVXFlipbook->SetLooping(false);
-	
+
     if (TrailSprite)
     {
         TrailSprite->SetHiddenInGame(true);
         TrailSprite->SetTranslucentSortPriority(10);
 
-        // Get unscaled LOCAL bounds (no world/relative scale applied).
         const FBoxSphereBounds BLocal = TrailSprite->GetLocalBounds();
-        float LocalWidthUU = BLocal.BoxExtent.X * 2.f; // width along +X in local space
+        float LocalWidthUU = BLocal.BoxExtent.X * 2.f; 
 
-        // Fallback if the asset has zero bounds (rare)
         if (LocalWidthUU <= KINDA_SMALL_NUMBER)
         {
-            // 16x2 sprite imported at PixelsPerUnit
             LocalWidthUU = FMath::Max(1e-3f, TrailSourceWidthPx / FMath::Max(PixelsPerUnit, 0.001f));
         }
 
@@ -159,14 +202,12 @@ void ACPP_FVX::ActivateVFX(UPaperFlipbook* Anim, const FVector& ImpactLoc)
 	SetActorHiddenInGame(false);
 	SetActorTickEnabled(true);
 
-	// 1) Move + face target (teleport physics, like your K2_SetWorldLocation with bTeleport=true)
 	if (VFXPivot)
 	{
 		VFXPivot->SetWorldLocation(ImpactLoc, false, nullptr, ETeleportType::TeleportPhysics);
 	}
 	SetActorRotation(ComputeLookAtFromPlayer(ImpactLoc), ETeleportType::TeleportPhysics);
 
-	// 2) Set flipbook + play
 	if (VFXFlipbook)
 	{
 		if (Anim) { VFXFlipbook->SetFlipbook(Anim); }
@@ -174,7 +215,6 @@ void ACPP_FVX::ActivateVFX(UPaperFlipbook* Anim, const FVector& ImpactLoc)
 		VFXFlipbook->PlayFromStart();
 	}
 
-	// 3) Arm a one-shot timer (GetFlipbookLength + small pad), unless looping
 	GetWorldTimerManager().ClearTimer(FVXTimer);
 
 	if (!bVFXLooping && VFXFlipbook && VFXFlipbook->GetFlipbook())
@@ -193,14 +233,61 @@ void ACPP_FVX::ActivateVFX(UPaperFlipbook* Anim, const FVector& ImpactLoc)
 		}
 		else
 		{
-			DeActivateVFX(); // zero-length safety
+			DeActivateVFX(); 
+		}
+	}
+}
+
+void ACPP_FVX::ActivateVFXTransform(UPaperFlipbook* Anim, const FTransform& WorldTransform)
+{
+	SetActorHiddenInGame(false);
+	SetActorTickEnabled(true);
+
+	if (VFXPivot)
+	{
+		VFXPivot->SetWorldTransform(WorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	else
+	{
+		SetActorTransform(WorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	const FRotator DesiredRot = WorldTransform.GetRotation().Rotator();
+	SetActorRotation(DesiredRot, ETeleportType::TeleportPhysics);
+
+	
+	if (VFXFlipbook)
+	{
+		if (Anim) { VFXFlipbook->SetFlipbook(Anim); }
+		VFXFlipbook->SetLooping(bVFXLooping);
+		VFXFlipbook->PlayFromStart();
+	}
+	
+	GetWorldTimerManager().ClearTimer(FVXTimer);
+
+	if (!bVFXLooping && VFXFlipbook && VFXFlipbook->GetFlipbook())
+	{
+		const float Len = FMath::Max(0.f, VFXFlipbook->GetFlipbookLength());
+		const float Delay = Len + ExtraHoldSeconds;
+
+		if (Delay > 0.f)
+		{
+			GetWorldTimerManager().SetTimer(
+				FVXTimer,
+				this,
+				&ACPP_FVX::DeActivateVFX,
+				Delay,
+				false
+			);
+		}
+		else
+		{
+			DeActivateVFX(); 
 		}
 	}
 }
 
 void ACPP_FVX::DeActivateVFX()
 {
-	// 4) default “finish” behavior (BP can override to return to pool)
 	GetWorldTimerManager().ClearTimer(FVXTimer);
 	GetWorldTimerManager().ClearTimer(TrailFadeTimer);
 
@@ -211,9 +298,6 @@ void ACPP_FVX::DeActivateVFX()
 	{
 		VFXFlipbook->Stop();
 	}
-
-	// Hide or destroy depending on your pooling strategy
-	// If you're using pooling via GM, override this in BP and call GM.I_GM_PoolFVX(self)
 	VFXPivot->SetWorldLocation(OriginLoc, false, nullptr, ETeleportType::TeleportPhysics);
 	SetActorHiddenInGame(true);
 	SetActorTickEnabled(false);
@@ -229,7 +313,109 @@ FRotator ACPP_FVX::ComputeLookAtFromPlayer(const FVector& Target) const
 	return UKismetMathLibrary::FindLookAtRotation(Start, Target);
 }
 
-// Called every frame
+void ACPP_FVX::OnLoaderCompleted(FName RowName, const FVFXAnimationResolved& VFX)
+{
+	CachedRows.Add(RowName, VFX);
+
+	if (TObjectPtr<UUtil_BpAsyncVFXFlipbooks>* L = InFlight.Find(RowName))
+	{
+		if (L->Get())
+		{
+			L->Get()->OnCompleted.RemoveAll(this);
+			L->Get()->OnFailed.RemoveAll(this);
+		}
+	}
+	InFlight.Remove(RowName);
+
+	if (TArray<FTransform>* Transforms = PendingTransforms.Find(RowName))
+	{
+		const FTransform UseTransform = Transforms->Last();
+		PendingTransforms.Remove(RowName);
+
+		PlayResolvedTransform(VFX, UseTransform);
+		return;
+	}
+
+	if (TArray<FVector>* Locations = PendingLocations.Find(RowName))
+	{
+		const FVector UseLoc = Locations->Last();
+		PendingLocations.Remove(RowName);
+
+		PlayResolvedLocation(VFX, UseLoc);
+		return;
+	}
+}
+
+void ACPP_FVX::OnLoaderFailed()
+{
+	InFlight.Reset();
+	PendingLocations.Reset();
+	PendingTransforms.Reset();
+}
+
+void ACPP_FVX::PlayResolvedInternal(const FVFXAnimationResolved& Resolved, const FTransform& WorldTransform, bool bAllowFace)
+{
+	UPaperFlipbook* Anim =
+		Resolved.AnimVar1 ? Resolved.AnimVar1 :
+		(Resolved.AnimVar2 ? Resolved.AnimVar2 : Resolved.AnimVar3);
+
+	if (!Anim || !VFXFlipbook) return;
+
+	SetActorHiddenInGame(false);
+	SetActorTickEnabled(true);
+
+	if (VFXPivot)
+	{
+		VFXPivot->SetWorldTransform(WorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	else
+	{
+		SetActorTransform(WorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
+	if (bAllowFace)
+	{
+		const FVector Loc = WorldTransform.GetLocation();
+		SetActorRotation(ComputeLookAtFromPlayer(Loc), ETeleportType::TeleportPhysics);
+	}
+	else
+	{
+		const FRotator DesiredRot = WorldTransform.GetRotation().Rotator();
+		SetActorRotation(DesiredRot, ETeleportType::TeleportPhysics);
+	}
+
+	VFXFlipbook->SetFlipbook(Anim);
+	VFXFlipbook->SetLooping(bVFXLooping);
+	VFXFlipbook->PlayFromStart();
+
+	GetWorldTimerManager().ClearTimer(FVXTimer);
+
+	if (!bVFXLooping && VFXFlipbook->GetFlipbook())
+	{
+		const float Len = FMath::Max(0.f, VFXFlipbook->GetFlipbookLength());
+		const float Delay = Len + ExtraHoldSeconds;
+
+		if (Delay > 0.f)
+		{
+			GetWorldTimerManager().SetTimer(FVXTimer, this, &ACPP_FVX::DeActivateVFX, Delay, false);
+		}
+		else
+		{
+			DeActivateVFX();
+		}
+	}
+}
+
+void ACPP_FVX::PlayResolvedLocation(const FVFXAnimationResolved& Resolved, const FVector& WorldLocation)
+{
+	PlayResolvedInternal(Resolved, FTransform(WorldLocation), true);
+}
+
+void ACPP_FVX::PlayResolvedTransform(const FVFXAnimationResolved& Resolved, const FTransform& WorldTransform)
+{
+	PlayResolvedInternal(Resolved, WorldTransform, false);
+}
+
 void ACPP_FVX::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);

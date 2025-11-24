@@ -8,6 +8,8 @@
 #include "PaperSpriteComponent.h"
 #include "PaperFlipbook.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/DataTable.h"
+#include "Utility/Util_BpAsyncVFXFlipbooks.h"
 #include "CPP_FVX.generated.h"
 
 UCLASS()
@@ -27,6 +29,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "VFX")
 	TObjectPtr<USceneComponent> VFXPivot;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "VFX|Data")
+	TObjectPtr<UDataTable> VFXDataTable;
 
 	UPROPERTY(EditAnywhere, Category = "VFX|Config")
 	bool bVFXLooping = false;
@@ -90,12 +95,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "VFX")
 	void ActivateBulletImpact(UPaperFlipbook* BurstAnim, const FVector& Muzzle, const FVector& Impact);
 
+	// Old-style: by name + location (uses facing like your current ActivateVFX)
+	UFUNCTION(BlueprintCallable, Category = "VFX|Data")
+	void ActivateVFXByName(FName RowName, const FVector& ImpactLoc);
+
+	// New-style: by name + full transform (NO facing override)
+	UFUNCTION(BlueprintCallable, Category = "VFX|Data")
+	void ActivateVFXByNameTransform(FName RowName, const FTransform& WorldTransform);
+
 protected:
 	// Called when the game starts or when spawned
 	virtual void BeginPlay() override;
 
 	UFUNCTION(BlueprintCallable, Category = "VFX")
 	void ActivateVFX(UPaperFlipbook* Anim, const FVector& ImpactLoc);
+
+	UFUNCTION(BlueprintCallable, Category = "VFX")
+	void ActivateVFXTransform(UPaperFlipbook* Anim, const FTransform& WorldTransform);
 
 	UFUNCTION(BlueprintCallable, Category = "VFX")
 	void DeActivateVFX();
@@ -131,6 +147,28 @@ private:
 		const float t = FMath::GetRangePct(SolidAngleDeg, DashedAngleDeg, ang);
 		return FMath::Clamp(t, 0.f, 1.f);
 	}
+
+	// ---- Async caching system (FolkGrave-style) ----
+	TMap<FName, FVFXAnimationResolved> CachedRows;
+
+	UPROPERTY() // keep loaders alive
+		TMap<FName, TObjectPtr<UUtil_BpAsyncVFXFlipbooks>> InFlight;
+
+	// Pending requests while a row is loading
+	TMap<FName, TArray<FVector>> PendingLocations;
+	TMap<FName, TArray<FTransform>> PendingTransforms;
+
+	// Loader callbacks
+	UFUNCTION()
+	void OnLoaderCompleted(FName RowName, const FVFXAnimationResolved& VFX);
+
+	UFUNCTION()
+	void OnLoaderFailed();
+
+	// Internal play helpers
+	void PlayResolvedInternal(const FVFXAnimationResolved& Resolved, const FTransform& WorldTransform, bool bAllowFace);
+	void PlayResolvedLocation(const FVFXAnimationResolved& Resolved, const FVector& WorldLocation);
+	void PlayResolvedTransform(const FVFXAnimationResolved& Resolved, const FTransform& WorldTransform);
 };
 
 
