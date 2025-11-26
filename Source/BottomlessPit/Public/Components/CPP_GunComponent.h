@@ -23,15 +23,12 @@ public:
 
 	/** Set active mode + projectile row (call this from your pickup overlap). */
 	UFUNCTION(BlueprintCallable, Category = "Gun|FireMode")
-	void ApplyFireMode(const FFireModeProfile& Profile, FName ProjectileRowName);
+	void ApplyFireMode(const FFireModeProfile& Profile);
 
 	/** Optional helper if you want to change RPM at runtime directly. */
 	UFUNCTION(BlueprintCallable, Category = "Gun|FireMode")
 	void SetRoundsPerMinute(float NewRPM);
 
-	// ===== ONE event you implement in BP to call your pooled-spawn interface =====
-	/** Called by C++ for every single shot that must be spawned.
-		Implement in BP: forward to your GameMode pool interface with RowName + ShotDir. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Gun|Fire")
 	void OnRequestSpawnShot(FVector ShotDir, FName ProjectileRowName, bool bPenetrate, float ProjectileScale, float DamagePerProjectile, float ProjectileLifeSecondsOverride);
 
@@ -41,6 +38,13 @@ public:
 	UFUNCTION(BlueprintNativeEvent, Category = "Gun|Ammo")
 	bool TryConsumeAmmo(int32 Cost);
 	virtual bool TryConsumeAmmo_Implementation(int32 Cost);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Gun|Fire")
+	void OnTriggerFired(const FFireModeProfile& Profile);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Gun|Gate")
+	bool CanBeginTrigger();
+	virtual bool CanBeginTrigger_Implementation();
 
 private:
 	// cadence
@@ -65,12 +69,22 @@ private:
 	void FireVolley(int32 Count);         // spawns N “shots” via OnRequestSpawnShot
 	void GenerateShotDirs(int32 Count, TArray<FVector>& OutDirs) const;
 	void FireTrigger();
+	bool IsBurstReady() const;
+	bool TriggerOnce();
 
 	// burst state
 	bool  bBurstActive = false;
 	int32 BurstShotsRemaining = 0;
 	void  BeginBurst();
 	void  BurstTick();
+
+	FTimerHandle AutoBurstTimer;     // schedules next burst while holding
+	bool  bWantsToFire = false;      // input-held
+	double NextTriggerTime = 0.0;    // when next burst is allowed by RPM
+	double LastBurstTriggerTime = -1.0;
+
+	void MaybeScheduleNextHeldBurst();
+	void OnBurstFinished();
 		
 };
 

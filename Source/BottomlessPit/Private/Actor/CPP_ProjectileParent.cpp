@@ -9,6 +9,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "Engine/EngineTypes.h"
 #include "TimerManager.h"
+#include "Components/CPP_GunComponent.h"
+#include "Utility/Util_BpAsyncFireModeProfile.h" 
 #include "Engine/CollisionProfile.h"
 
 
@@ -39,6 +41,43 @@ ACPP_ProjectileParent::ACPP_ProjectileParent()
 	// Start inactive; FireFrom will arm
 	SetActorHiddenInGame(true);
 	SetActorEnableCollision(false);
+}
+
+void ACPP_ProjectileParent::ConfigureFromOwnerFireMode()
+{
+	MoveDir = FVector(0.f, 0.f, -1.f); // default straight down
+
+	AActor* Ow = GetOwner();
+	UCPP_GunComponent* Gun = Ow ? Ow->FindComponentByClass<UCPP_GunComponent>() : nullptr;
+
+	// fallback: player 0 (jam-safe if Owner not set)
+	if (!Gun)
+	{
+		if (APawn* P = UGameplayStatics::GetPlayerPawn(this, 0))
+		{
+			Gun = P->FindComponentByClass<UCPP_GunComponent>();
+		}
+	}
+	if (!Gun) return;
+
+	const FFireModeProfile Profile = Gun->GetCurrentProfile();
+
+	// penetrate => don't auto-impact
+	bAutoImpactOnHit = !Profile.bPenetrate;
+
+	// visual scale
+	if (Visual)
+	{
+		const float S = FMath::Max(0.01f, Profile.ProjectileScale);
+		Visual->SetWorldScale3D(FVector(S));
+	}
+
+	// cone spread around DOWN; yaw on Z would NOT affect a Z-aligned vector
+	if (Profile.bUseSpread && Profile.SpreadAngleDeg > KINDA_SMALL_NUMBER)
+	{
+		const float HalfAngleRad = FMath::DegreesToRadians(Profile.SpreadAngleDeg);
+		MoveDir = FMath::VRandCone(FVector(0.f, 0.f, -1.f), HalfAngleRad).GetSafeNormal();
+	}
 }
 
 void ACPP_ProjectileParent::BeginPlay()
@@ -81,32 +120,27 @@ void ACPP_ProjectileParent::ApplyRuntimeConfig(const FProjectileAnimResolved& In
 
 void ACPP_ProjectileParent::FireFrom(const FVector& StartLocation, AActor* InstigatorActor)
 {
-	// Reset runtime state
 	bActive = false;
 	bHasImpacted = false;
 	TraveledDistance = 0.f;
-	DownVelocity = FVector(0.f, 0.f, -FMath::Max(0.f, Stats.Speed));
+	MoveDir = FVector(0.f, 0.f, -1.f);
 	LastImpactPoint = FVector::ZeroVector;
 	LastImpactNormal = FVector::UpVector;
 	FlipState = EProjectileFlipbookState::None;
 
-	// Instigator for attribution (you can use in your BP logic)
-	if (APawn* AsPawn = Cast<APawn>(InstigatorActor))
-	{
-		SetInstigator(AsPawn);
-	}
-	if (InstigatorActor)
-	{
-		SetOwner(InstigatorActor);
-	}
+	if (APawn* AsPawn = Cast<APawn>(InstigatorActor)) { SetInstigator(AsPawn); }
+	if (InstigatorActor) { SetOwner(InstigatorActor); }
 
-	// Teleport to start
 	SetActorLocation(StartLocation, false, nullptr, ETeleportType::TeleportPhysics);
-
-	// Ensure Tick matches stepping mode
 	PrimaryActorTick.bCanEverTick = !Stats.bUseFixedStep;
 
-	// Arm projectile
+	// --- pull penetrate/scale/spread from owner’s gun component ---
+	ConfigureFromOwnerFireMode();
+
+	// Use direction * speed (keeps compatibility with StepMove that multiplies DownVelocity)
+	const float UseSpeed = FMath::Max(0.f, Stats.Speed);
+	DownVelocity = MoveDir.GetSafeNormal() * UseSpeed;
+
 	ArmAndGo();
 }
 
@@ -167,21 +201,14 @@ void ACPP_ProjectileParent::Disarm()
 
 void ACPP_ProjectileParent::Deactivate_Internal()
 {
-	// Central “return to pool” path
 	Disarm();
-
-	// Reset transient state for next reuse
 	bHasImpacted = false;
 	TraveledDistance = 0.f;
-	DownVelocity = FVector(0.f, 0.f, -FMath::Max(0.f, Stats.Speed));
+	MoveDir = FVector(0, 0, -1);              
 	LastImpactPoint = FVector::ZeroVector;
 	LastImpactNormal = FVector::UpVector;
 	FlipState = EProjectileFlipbookState::None;
-
-	// Notify pool manager (GameMode/etc.)
 	OnDeactivated.Broadcast(this);
-
-	// NOTE: Do NOT Destroy(). Your pool keeps a reference and will re-activate later.
 }
 
 void ACPP_ProjectileParent::HandleBlockingHit(const FHitResult& Hit)
@@ -221,31 +248,23 @@ void ACPP_ProjectileParent::StopFixedStep()
 
 void ACPP_ProjectileParent::StepMove(float Dt)
 {
-	if (!bActive || bHasImpacted || Dt <= 0.f || Stats.Speed <= 0.f || !RootComponent)
-		return;
+	if (!bActive || bHasImpacted || Dt <= 0.f || Stats.Speed <= 0.f || !RootComponent) return;
 
-	const FVector Delta = DownVelocity * Dt; // (0,0,-Speed) * dt
+	const FVector Delta = DownVelocity * Dt;
 
 	FHitResult Hit;
 	const bool bMoved = RootComponent->MoveComponent(
-		Delta, GetActorRotation(),
-		/*bSweep=*/true, &Hit,
-		MOVECOMP_NoFlags, ETeleportType::None);
+		Delta, GetActorRotation(), /*bSweep=*/true, &Hit, MOVECOMP_NoFlags, ETeleportType::None);
 
 	if (bMoved && Hit.bBlockingHit)
 	{
-		// Broadcast blocking contact; BP decides what to do.
 		OnBlock.Broadcast(this, Hit);
-
-		if (bAutoImpactOnHit)
-		{
-			TriggerImpactAndDeactivate(Hit);
-		}
+		if (bAutoImpactOnHit) { TriggerImpactAndDeactivate(Hit); }
 		return;
 	}
 
-	// Distance guard
-	TraveledDistance += FMath::Abs(Delta.Z); // Z is negative; track magnitude
+	// Use full distance, not only |Delta.Z|
+	TraveledDistance += Delta.Size();
 	if (Stats.MaxTravelDistance > 0.f && TraveledDistance >= Stats.MaxTravelDistance)
 	{
 		Deactivate_Internal();

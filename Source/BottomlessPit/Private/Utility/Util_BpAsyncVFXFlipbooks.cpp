@@ -71,6 +71,7 @@ void UUtil_BpAsyncVFXFlipbooks::OnAllLoaded()
     Resolved.AnimVar1 = RowCopy.AnimVar1.Get();
     Resolved.AnimVar2 = RowCopy.AnimVar2.Get();
     Resolved.AnimVar3 = RowCopy.AnimVar3.Get();
+    Resolved.Tint = RowCopy.Tint;
 
     Handle.Reset();
     OnCompleted.Broadcast(RowName, Resolved);

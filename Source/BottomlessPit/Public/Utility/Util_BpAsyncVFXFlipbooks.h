@@ -26,6 +26,9 @@ struct FVFXAnimationRow : public FTableRowBase
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly)
     TSoftObjectPtr<UPaperFlipbook> AnimVar3;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly)
+    FLinearColor Tint = FLinearColor::White;
 };
 
 /** Resolved/hard refs after async load */
@@ -42,6 +45,9 @@ struct FVFXAnimationResolved
 
     UPROPERTY(BlueprintReadOnly)
     UPaperFlipbook* AnimVar3 = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly)
+    FLinearColor Tint = FLinearColor::White;
 };
 
 // Delegates for BP

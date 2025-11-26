@@ -15,15 +15,27 @@ UCPP_GunComponent::UCPP_GunComponent()
 	// ...
 }
 
-/* ================== PUBLIC API ================== */
 
-void UCPP_GunComponent::ApplyFireMode(const FFireModeProfile& Profile, FName ProjectileRowName)
+void UCPP_GunComponent::ApplyFireMode(const FFireModeProfile& Profile)
 {
 	CurrentProfile = Profile;
-	CurrentProjectileRowName = ProjectileRowName;
+	CurrentProjectileRowName = Profile.ProjectileName;
+
+	// stop any previous cadence or burst timers
+	if (UWorld* W = GetWorld())
+	{
+		W->GetTimerManager().ClearTimer(FireTimer);
+		W->GetTimerManager().ClearTimer(BurstTimer);
+	}
+
+	bBurstActive = false;
+	BurstShotsRemaining = 0;
+
 	SetRoundsPerMinute(CurrentProfile.RoundsPerMinute);
-	// make next shot immediate
+
 	LastShotTime = -1.0;
+	LastBurstTriggerTime = -1.0;    // <<< ADD THIS
+	bWantsToFire = false;   // optional but nice to clean up
 }
 
 void UCPP_GunComponent::SetRoundsPerMinute(float NewRPM)
@@ -39,7 +51,7 @@ void UCPP_GunComponent::SetRoundsPerMinute(float NewRPM)
 		if (Interval > 0.f)
 		{
 			LastShotTime = GetWorld()->GetTimeSeconds();
-			GetWorld()->GetTimerManager().SetTimer(FireTimer, this, &UCPP_GunComponent::FireAccordingToMode, Interval, true, Interval);
+			GetWorld()->GetTimerManager().SetTimer(FireTimer, this, &UCPP_GunComponent::FireTrigger, Interval, true, Interval);
 		}
 	}
 }
@@ -50,59 +62,63 @@ bool UCPP_GunComponent::TryConsumeAmmo_Implementation(int32 Cost)
 	return true;
 }
 
+bool UCPP_GunComponent::CanBeginTrigger_Implementation()
+{
+	return true;
+}
+
 void UCPP_GunComponent::StartFire()
 {
+	bWantsToFire = true;
+
 	if (CurrentProfile.Mode == EFireMode::Burst)
 	{
-		BeginBurst(); // tap or hold just starts one burst
-		return;
+		// One burst per press, internal RPM / ammo / gate handled in BeginBurst
+		if (!bBurstActive)
+		{
+			BeginBurst();
+		}
+		return; // no RPM loop timer for burst
 	}
 
+	// ===== non-burst unchanged =====
 	const float Interval = ShotInterval();
-	FireOnce(); // may call FireTrigger()
-
+	FireOnce();
 	if (Interval > 0.f)
 	{
 		const double Now = GetWorld()->GetTimeSeconds();
 		const float Since = (LastShotTime < 0.0) ? 0.f : float(Now - LastShotTime);
-		const float Remaining = FMath::Max(0.f, Interval - Since);
+		const float Remain = FMath::Max(0.f, Interval - Since);
 
 		GetWorld()->GetTimerManager().SetTimer(
-			FireTimer, this, &UCPP_GunComponent::FireTrigger, Interval, true, Remaining
-		);
+			FireTimer, this, &UCPP_GunComponent::FireTrigger, Interval, true, Remain);
 	}
 }
 
 void UCPP_GunComponent::StopFire()
 {
-	GetWorld()->GetTimerManager().ClearTimer(FireTimer);
-
-	if (bBurstActive)
-	{
-		GetWorld()->GetTimerManager().ClearTimer(BurstTimer);
-		bBurstActive = false;
-		BurstShotsRemaining = 0;
-	}
+	bWantsToFire = false;
+    GetWorld()->GetTimerManager().ClearTimer(FireTimer);
+    //GetWorld()->GetTimerManager().ClearTimer(AutoBurstTimer);
 }
 
 void UCPP_GunComponent::FireOnce()
 {
-	// Burst: tap should start a burst immediately, ignoring RPM gate and charging ONCE
 	if (CurrentProfile.Mode == EFireMode::Burst)
 	{
 		if (!bBurstActive)
 		{
-			BeginBurst();   // BeginBurst does the single ammo charge
+			BeginBurst();
 		}
 		return;
 	}
 
-	// Non-burst: RPM-gated trigger
-	const float Interval = ShotInterval();
+	// non-burst: RPM-gated single trigger
+	const float  Interval = ShotInterval();
 	const double Now = GetWorld()->GetTimeSeconds();
 	if (LastShotTime < 0.0 || Now - LastShotTime + KINDA_SMALL_NUMBER >= Interval)
 	{
-		FireTrigger();     // <- charges ammo once, then fires volley
+		FireTrigger();
 		LastShotTime = Now;
 	}
 }
@@ -121,11 +137,8 @@ void UCPP_GunComponent::FireAccordingToMode()
 	}
 	case EFireMode::Burst:
 	{
-		// If player single-taps in burst mode, begin a burst
-		if (!bBurstActive)
-		{
-			BeginBurst();
-		}
+		// Do nothing here. Bursts are started only from StartFire/FireOnce
+		// after CanBeginTrigger() + IsBurstReady() checks.
 		break;
 	}
 	case EFireMode::Auto:
@@ -142,34 +155,66 @@ void UCPP_GunComponent::FireAccordingToMode()
 
 void UCPP_GunComponent::BeginBurst()
 {
-	// Single ammo charge for the whole burst
-	const int32 Cost = FMath::Max(0, CurrentProfile.AmmoUsePerTrigger);
-	if (Cost > 0 && !TryConsumeAmmo(Cost))
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// ===== RPM gate per *burst* (not per bullet) =====
+	const float  Interval = ShotInterval();              // 60 / RPM
+	const double Now = World->GetTimeSeconds();
+
+	if (Interval > 0.f &&
+		LastBurstTriggerTime >= 0.0 &&
+		(Now - LastBurstTriggerTime + KINDA_SMALL_NUMBER) < Interval)
+	{
+		// too soon for next burst, silently ignore this trigger
+		return;
+	}
+
+	// same external gate as normal fire (ground check etc.)
+	if (!CanBeginTrigger())
 	{
 		bBurstActive = false;
 		BurstShotsRemaining = 0;
-		return; // not enough ammo, abort burst
+		return;
 	}
+
+	const int32 Cost = FMath::Max(0, CurrentProfile.AmmoUsePerTrigger);
+	if (!TryConsumeAmmo(Cost))   // always ask BP, even when Cost == 0
+	{
+		bBurstActive = false;
+		BurstShotsRemaining = 0;
+		return;
+	}
+
+	// sync the clocks
+	LastShotTime = Now;  // for FireOnce-based RPM feel, if you ever mix
+	LastBurstTriggerTime = Now;  // this is what gates next burst
+
+	OnTriggerFired(CurrentProfile);
 
 	bBurstActive = true;
 	BurstShotsRemaining = FMath::Max(1, CurrentProfile.ProjectileAmount);
 
 	// first shot now
 	FireVolley(1);
-	BurstShotsRemaining--;
+	--BurstShotsRemaining;
 
-	// schedule rest...
 	const float Step = FMath::Max(0.f, CurrentProfile.BurstInterval);
 	if (BurstShotsRemaining > 0 && Step > 0.f)
 	{
-		GetWorld()->GetTimerManager().SetTimer(BurstTimer, this, &UCPP_GunComponent::BurstTick, Step, true, Step);
+		World->GetTimerManager().SetTimer(
+			BurstTimer, this, &UCPP_GunComponent::BurstTick, Step, true, Step);
 	}
 	else
 	{
+		// either no interval or only 1 bullet: just dump the rest immediately
 		while (BurstShotsRemaining > 0)
 		{
 			FireVolley(1);
-			BurstShotsRemaining--;
+			--BurstShotsRemaining;
 		}
 		bBurstActive = false;
 	}
@@ -193,8 +238,6 @@ void UCPP_GunComponent::BurstTick()
 		bBurstActive = false;
 	}
 }
-
-/* ================== SHOT CREATION ================== */
 
 void UCPP_GunComponent::FireVolley(int32 Count)
 {
@@ -251,18 +294,31 @@ void UCPP_GunComponent::GenerateShotDirs(int32 Count, TArray<FVector>& OutDirs) 
 
 void UCPP_GunComponent::FireTrigger()
 {
-	// FREE shots if cost <= 0
-	const int32 Cost = FMath::Max(0, CurrentProfile.AmmoUsePerTrigger);
-
-	// Charge ONCE per trigger for Auto/Semi/Sniper/Shotgun
-	if (Cost > 0 && !TryConsumeAmmo(Cost))
+	if (!CanBeginTrigger())
 	{
-		// Out of ammo: stop any RPM loop
 		GetWorld()->GetTimerManager().ClearTimer(FireTimer);
 		return;
 	}
 
-	FireAccordingToMode(); // this will FireVolley() pellets or a single shot
+	const int32 Cost = FMath::Max(0, CurrentProfile.AmmoUsePerTrigger);
+	if (!TryConsumeAmmo(Cost))
+	{
+		GetWorld()->GetTimerManager().ClearTimer(FireTimer);
+		return;
+	}
+
+	FireAccordingToMode();
+	OnTriggerFired(CurrentProfile);
+}
+
+bool UCPP_GunComponent::IsBurstReady() const
+{
+	const float Interval = ShotInterval(); // 60 / RPM
+	const double Now = GetWorld()->GetTimeSeconds();
+
+	// Ready if we’ve never fired OR enough time since the last trigger (any mode)
+	if (Interval <= 0.f) return true; // 0 RPM => let BP gate it; reads clearer in jam
+	return (LastShotTime < 0.0) || (Now - LastShotTime + KINDA_SMALL_NUMBER >= Interval);
 }
 
 

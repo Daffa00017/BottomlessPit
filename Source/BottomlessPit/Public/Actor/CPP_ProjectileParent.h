@@ -3,7 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Utility/Util_BpAsyncProjectileFlipbooks.h" // FProjectileStats / FProjectileAnimResolved
+#include "Utility/Util_BpAsyncProjectileFlipbooks.h"
 #include "CPP_ProjectileParent.generated.h"
 
 class USphereComponent;
@@ -74,6 +74,9 @@ public:
 	/** Is this projectile currently active (armed & participating in world)? */
 	UFUNCTION(BlueprintPure, Category = "Projectile|State")
 	bool IsActive() const { return bActive; }
+
+	UFUNCTION(BlueprintCallable, Category = "Projectile|Config")
+	void ConfigureFromOwnerFireMode();
 
 protected:
 	virtual void BeginPlay() override;
@@ -161,6 +164,9 @@ private:
 	// Impact cache (used if you call TriggerImpactAndDeactivate)
 	FVector LastImpactPoint = FVector::ZeroVector;
 	FVector LastImpactNormal = FVector::UpVector;
+
+	UPROPERTY(Transient)
+	FVector MoveDir = FVector(0.f, 0.f, -1.f);
 };
 
 

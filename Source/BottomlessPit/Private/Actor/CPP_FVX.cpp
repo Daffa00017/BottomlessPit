@@ -386,6 +386,7 @@ void ACPP_FVX::PlayResolvedInternal(const FVFXAnimationResolved& Resolved, const
 
 	VFXFlipbook->SetFlipbook(Anim);
 	VFXFlipbook->SetLooping(bVFXLooping);
+	VFXFlipbook->SetSpriteColor(Resolved.Tint);
 	VFXFlipbook->PlayFromStart();
 
 	GetWorldTimerManager().ClearTimer(FVXTimer);
