@@ -57,8 +57,7 @@ void ACPP_GM_BottomlessPit::StopScoring()
 
 void ACPP_GM_BottomlessPit::AddScore(float Amount)
 {
-    PlayerScore = PlayerScore+Amount;
-    OnScoreUpdated.Broadcast(PlayerScore);
+    UpdateScore(Amount);
 }
 
 void ACPP_GM_BottomlessPit::CheckPlayerDepth()

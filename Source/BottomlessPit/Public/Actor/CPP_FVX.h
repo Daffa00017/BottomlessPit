@@ -122,6 +122,10 @@ protected:
 private:	
 	FTimerHandle FVXTimer;
 	FTimerHandle TrailFadeTimer;
+	float        TrailFadeStartTime = 0.f;
+
+	UFUNCTION()
+	void TickTrailFade();
 
 	// Helper: face from Player to ImpactLoc (matches your FindLookAtRotation path)
 	FRotator ComputeLookAtFromPlayer(const FVector& Target) const;
@@ -148,11 +152,11 @@ private:
 		return FMath::Clamp(t, 0.f, 1.f);
 	}
 
-	// ---- Async caching system (FolkGrave-style) ----
+	UPROPERTY()
 	TMap<FName, FVFXAnimationResolved> CachedRows;
 
 	UPROPERTY() // keep loaders alive
-		TMap<FName, TObjectPtr<UUtil_BpAsyncVFXFlipbooks>> InFlight;
+	TMap<FName, TObjectPtr<UUtil_BpAsyncVFXFlipbooks>> InFlight;
 
 	// Pending requests while a row is loading
 	TMap<FName, TArray<FVector>> PendingLocations;

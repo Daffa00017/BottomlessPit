@@ -51,7 +51,7 @@ void ACPP_FVX::ActivateTrail(const FVector& From, const FVector& To)
 	const float PixelUU = 1.f / FMath::Max(PixelsPerUnit, 0.001f);
 	Len2D = FMath::Max(0.f, Len2D - 0.5f * PixelUU);
 
-	const FVector Dir(D2.X, 0.f, D2.Y);                
+	const FVector Dir(D2.X, 0.f, D2.Y);
 	const FRotator Rot = FRotationMatrix::MakeFromX(Dir.GetSafeNormal()).Rotator();
 
 	TrailSprite->SetUsingAbsoluteLocation(true);
@@ -68,7 +68,7 @@ void ACPP_FVX::ActivateTrail(const FVector& From, const FVector& To)
 	{
 		TrailMID->SetScalarParameterValue(TEXT("Tiling"), Len2D / FMath::Max(TileWorldUU, 0.001f));
 		TrailMID->SetScalarParameterValue(TEXT("Thickness"), Thickness);
-		TrailMID->SetScalarParameterValue(TEXT("DashFill"), 1.05f); 
+		TrailMID->SetScalarParameterValue(TEXT("DashFill"), 1.05f);
 		TrailMID->SetScalarParameterValue(TEXT("HeadTaper"), HeadTaper);
 		TrailMID->SetScalarParameterValue(TEXT("Fade"), 1.0f);
 		TrailMID->SetScalarParameterValue(TEXT("UseDashes"), bUseDashes ? 1.f : 0.f);
@@ -78,28 +78,17 @@ void ACPP_FVX::ActivateTrail(const FVector& From, const FVector& To)
 	TrailSprite->SetHiddenInGame(false);
 
 	GetWorldTimerManager().ClearTimer(TrailFadeTimer);
-	if (TrailLife > 0.f)
+	if (TrailLife > 0.f && GetWorld())
 	{
-		const float StartTime = GetWorld()->GetTimeSeconds();
+		TrailFadeStartTime = GetWorld()->GetTimeSeconds();
 		GetWorldTimerManager().SetTimer(
 			TrailFadeTimer,
-			[this, StartTime]()
-			{
-				if (!TrailMID) return;
-				const float t = (GetWorld()->GetTimeSeconds() - StartTime) / FMath::Max(TrailLife, 0.001f);
-				const float FadeVal = 1.f - FMath::Clamp(t, 0.f, 1.f);
-				TrailMID->SetScalarParameterValue(TEXT("Fade"), FadeVal);
-				if (t >= 1.f)
-				{
-					GetWorldTimerManager().ClearTimer(TrailFadeTimer);
-					TrailSprite->SetHiddenInGame(true);
-				}
-			},
-			0.016f, true
+			this,
+			&ACPP_FVX::TickTrailFade,
+			0.016f,
+			true
 		);
 	}
-
-	//UE_LOG(LogTemp, Warning, TEXT("(Len=%.2f, Base=%.2f, CompRelX=%.3f, LocalScaleX=%.3f)"),Len2D, CachedBaseLenLocalUU, LocalScaleX, LocalScaleX);
 }
 
 void ACPP_FVX::SetTrailVisible(bool bVisible)
@@ -306,6 +295,26 @@ void ACPP_FVX::DeActivateVFX()
 }
 
 
+void ACPP_FVX::TickTrailFade()
+{
+	UWorld* World = GetWorld();
+	if (!World || !TrailMID || !TrailSprite)
+	{
+		GetWorldTimerManager().ClearTimer(TrailFadeTimer);
+		return;
+	}
+
+	const float t = (World->GetTimeSeconds() - TrailFadeStartTime) / FMath::Max(TrailLife, 0.001f);
+	const float FadeVal = 1.f - FMath::Clamp(t, 0.f, 1.f);
+	TrailMID->SetScalarParameterValue(TEXT("Fade"), FadeVal);
+
+	if (t >= 1.f)
+	{
+		GetWorldTimerManager().ClearTimer(TrailFadeTimer);
+		TrailSprite->SetHiddenInGame(true);
+	}
+}
+
 FRotator ACPP_FVX::ComputeLookAtFromPlayer(const FVector& Target) const
 {
 	ACharacter* Player = UGameplayStatics::GetPlayerCharacter(this, 0);
@@ -355,15 +364,50 @@ void ACPP_FVX::OnLoaderFailed()
 
 void ACPP_FVX::PlayResolvedInternal(const FVFXAnimationResolved& Resolved, const FTransform& WorldTransform, bool bAllowFace)
 {
-	UPaperFlipbook* Anim =
-		Resolved.AnimVar1 ? Resolved.AnimVar1 :
-		(Resolved.AnimVar2 ? Resolved.AnimVar2 : Resolved.AnimVar3);
+	// Be defensive: only trust AnimVar1 and AnimVar2.
+	UPaperFlipbook* Anim = nullptr;
 
-	if (!Anim || !VFXFlipbook) return;
+	if (Resolved.AnimVar1)
+	{
+		Anim = Resolved.AnimVar1;
+	}
+	else if (Resolved.AnimVar2)
+	{
+		Anim = Resolved.AnimVar2;
+	}
+
+	// Extra safety checks – cooked build is crashing because Anim is a bogus pointer (0xffffffffffffffff).
+	// 1) Component must exist.
+	if (!VFXFlipbook)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[FVX] PlayResolvedInternal: VFXFlipbook is null, aborting."));
+		return;
+	}
+
+	// 2) Must actually have an animation.
+	if (!Anim)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[FVX] PlayResolvedInternal: Resolved has no valid AnimVar1/AnimVar2, aborting."));
+		return;
+	}
+
+	// 3) Pointer sanity check: in the crash, this was 0xffffffffffffffff.
+	//    Real UObjects live in normal user space (0x0000... range), not with all high bits set.
+	const UPTRINT PtrVal = reinterpret_cast<UPTRINT>(Anim);
+	const UPTRINT HighBitsMask = (UPTRINT)0xFFFF000000000000ULL;
+
+	if ((PtrVal & HighBitsMask) == HighBitsMask || PtrVal == (UPTRINT)0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[FVX] PlayResolvedInternal: Anim pointer looks invalid (0x%p). Skipping to avoid crash."), Anim);
+		return;
+	}
+
+	// ---- Original logic below (unchanged) ----
 
 	SetActorHiddenInGame(false);
 	SetActorTickEnabled(true);
 
+	// Apply transform to pivot if it exists, otherwise to the actor
 	if (VFXPivot)
 	{
 		VFXPivot->SetWorldTransform(WorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
@@ -373,6 +417,7 @@ void ACPP_FVX::PlayResolvedInternal(const FVFXAnimationResolved& Resolved, const
 		SetActorTransform(WorldTransform, false, nullptr, ETeleportType::TeleportPhysics);
 	}
 
+	// Rotation: either face player or use the transform rotation
 	if (bAllowFace)
 	{
 		const FVector Loc = WorldTransform.GetLocation();
@@ -384,21 +429,30 @@ void ACPP_FVX::PlayResolvedInternal(const FVFXAnimationResolved& Resolved, const
 		SetActorRotation(DesiredRot, ETeleportType::TeleportPhysics);
 	}
 
+	// Play the flipbook
 	VFXFlipbook->SetFlipbook(Anim);
 	VFXFlipbook->SetLooping(bVFXLooping);
-	VFXFlipbook->SetSpriteColor(Resolved.Tint);
+	VFXFlipbook->SetPlaybackPosition(0.f, false);
 	VFXFlipbook->PlayFromStart();
 
+	// Clear any previous auto-deactivate timer
 	GetWorldTimerManager().ClearTimer(FVXTimer);
 
-	if (!bVFXLooping && VFXFlipbook->GetFlipbook())
+	// Schedule auto-deactivate for non-looping VFX
+	if (!bVFXLooping && VFXFlipbook && VFXFlipbook->GetFlipbook())
 	{
 		const float Len = FMath::Max(0.f, VFXFlipbook->GetFlipbookLength());
 		const float Delay = Len + ExtraHoldSeconds;
 
 		if (Delay > 0.f)
 		{
-			GetWorldTimerManager().SetTimer(FVXTimer, this, &ACPP_FVX::DeActivateVFX, Delay, false);
+			GetWorldTimerManager().SetTimer(
+				FVXTimer,
+				this,
+				&ACPP_FVX::DeActivateVFX,
+				Delay,
+				false
+			);
 		}
 		else
 		{

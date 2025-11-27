@@ -154,9 +154,12 @@ private:
 	// Distance tracking
 	float TraveledDistance = 0.f;
 
-	// Timers
 	FTimerHandle LifeTimerHandle;
 	FTimerHandle FixedStepTimerHandle;
+	float        FixedStepDt = 0.f;
+
+	UFUNCTION()
+	void FixedStepTick();
 
 	// Visual state
 	EProjectileFlipbookState FlipState = EProjectileFlipbookState::None;

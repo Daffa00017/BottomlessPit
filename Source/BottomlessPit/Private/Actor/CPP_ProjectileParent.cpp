@@ -62,8 +62,14 @@ void ACPP_ProjectileParent::ConfigureFromOwnerFireMode()
 
 	const FFireModeProfile Profile = Gun->GetCurrentProfile();
 
+	// Combine fire-mode and projectile-stats penetration flags
+	const bool bProfilePenetrate = Profile.bPenetrate;
+	const bool bStatsPenetrate = Stats.bPenetrate;   // <-- the one you tick in your projectile stats
+
+	const bool bWantsPenetrate = bProfilePenetrate || bStatsPenetrate;
+
 	// penetrate => don't auto-impact
-	bAutoImpactOnHit = !Profile.bPenetrate;
+	bAutoImpactOnHit = !bWantsPenetrate;
 
 	// visual scale
 	if (Visual)
@@ -222,18 +228,22 @@ void ACPP_ProjectileParent::DeactivateAndReturnToPool()
 
 void ACPP_ProjectileParent::StartFixedStep()
 {
+	// Make sure no old timer is still alive
 	StopFixedStep();
 
 	const float ClampedHz = FMath::Clamp(Stats.FixedStepHz, 30.f, 480.f);
-	const float StepDt = 1.f / ClampedHz;
+	FixedStepDt = (ClampedHz > 0.f) ? 1.f / ClampedHz : 0.f;
+
+	if (FixedStepDt <= 0.f || !GetWorld())
+	{
+		return;
+	}
 
 	GetWorldTimerManager().SetTimer(
 		FixedStepTimerHandle,
-		[this, StepDt]()
-		{
-			StepMove(StepDt);
-		},
-		StepDt,
+		this,
+		&ACPP_ProjectileParent::FixedStepTick,
+		FixedStepDt,
 		true
 	);
 }
@@ -248,18 +258,45 @@ void ACPP_ProjectileParent::StopFixedStep()
 
 void ACPP_ProjectileParent::StepMove(float Dt)
 {
-	if (!bActive || bHasImpacted || Dt <= 0.f || Stats.Speed <= 0.f || !RootComponent) return;
+	if (!bActive || bHasImpacted || Dt <= 0.f || Stats.Speed <= 0.f || !RootComponent)
+	{
+		return;
+	}
 
 	const FVector Delta = DownVelocity * Dt;
 
 	FHitResult Hit;
 	const bool bMoved = RootComponent->MoveComponent(
-		Delta, GetActorRotation(), /*bSweep=*/true, &Hit, MOVECOMP_NoFlags, ETeleportType::None);
+		Delta,
+		GetActorRotation(),
+		/*bSweep=*/true,
+		&Hit,
+		MOVECOMP_NoFlags,
+		ETeleportType::None
+	);
 
 	if (bMoved && Hit.bBlockingHit)
 	{
 		OnBlock.Broadcast(this, Hit);
-		if (bAutoImpactOnHit) { TriggerImpactAndDeactivate(Hit); }
+
+		bool bShouldImpact = bAutoImpactOnHit;
+
+		if (UPrimitiveComponent* HitComp = Hit.GetComponent())
+		{
+			const ECollisionChannel ObjType = HitComp->GetCollisionObjectType();
+
+			// Always impact on world geometry (platforms, walls, etc.)
+			if (ObjType == ECC_WorldStatic || ObjType == ECC_WorldDynamic)
+			{
+				bShouldImpact = true;
+			}
+		}
+
+		if (bShouldImpact)
+		{
+			TriggerImpactAndDeactivate(Hit);
+		}
+
 		return;
 	}
 
@@ -380,6 +417,22 @@ void ACPP_ProjectileParent::OnFlipbookFinished()
 	{
 		Deactivate_Internal(); // return to pool
 	}
+}
+
+void ACPP_ProjectileParent::FixedStepTick()
+{
+	// Extra safety: if this projectile is already "dead", do nothing.
+	if (!bActive || bHasImpacted || Stats.Speed <= 0.f || !RootComponent)
+	{
+		return;
+	}
+
+	const float Dt =
+		(FixedStepDt > 0.f)
+		? FixedStepDt
+		: 1.f / FMath::Clamp(Stats.FixedStepHz, 30.f, 480.f);
+
+	StepMove(Dt);
 }
 
 void ACPP_ProjectileParent::TriggerImpactAndDeactivate(const FHitResult& Hit)
